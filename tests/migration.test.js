@@ -104,6 +104,48 @@ test('unsupported identity type', () => rejected(d => { d.site[1]._id = TARGET; 
 test('unsupported site reference', () => rejected(d => { d.setting[0].site_id = 123; }));
 test('orphan reference', () => rejected(d => { d.setting[0].site_id = '777777777777777777777777'; }));
 test('unknown Default references', () => rejected(d => { d.unreviewed = [{site_id: OLD}]; }));
+test('activity history preflight is read only and reports retention', () => {
+    const d = fixture();
+    d.admin_activity_log = [{_id: ObjectId('aaaaaaaaaaaaaaaaaaaaaaaa'), site_id: OLD, event: 'synthetic'}];
+    const before = JSON.stringify(d), result = run(d);
+    assert.match(result.output, /UOS RETAIN history=admin_activity_log old_site_references=1 unchanged/);
+    assert.match(result.output, /UOS READY/);
+    assert.equal(result.writes.length, 0);
+    assert.equal(JSON.stringify(d), before);
+});
+test('activity history survives promotion and completed verification', () => {
+    const d = fixture();
+    d.admin_activity_log = [{site_id: OLD}, {site_id: ObjectId(OLD)}, {site_id: TARGET}];
+    const before = JSON.stringify(d.admin_activity_log);
+    assert.match(run(d, TARGET, 'flags').output, /UOS READY/);
+    const result = run(d, TARGET, 'cleanup');
+    assert.match(result.output, /UOS READY/);
+    assert.equal(result.writes.includes('admin_activity_log'), false);
+    assert.match(run(d, TARGET, 'verify').output, /UOS READY/);
+    assert.equal(JSON.stringify(d.admin_activity_log), before);
+});
+test('unrelated orphan activity reference still rejected', () => rejected(d => {
+    d.admin_activity_log = [{site_id: '777777777777777777777777'}];
+}));
+test('unsupported activity reference still rejected', () => rejected(d => {
+    d.admin_activity_log = [{site_id: [OLD]}];
+}));
+test('activity history cannot conceal Default devices', () => rejected(d => {
+    d.admin_activity_log = [{site_id: OLD}]; d.device.push({site_id: OLD});
+}));
+test('all unreviewed Default reference collections reported together', () => {
+    const d = fixture();
+    d.extra_first = [{site_id: OLD}]; d.extra_second = [{site_id: OLD}];
+    const result = run(d);
+    assert.match(result.output, /UOS BLOCK collection=extra_first old_site_references=1/);
+    assert.match(result.output, /UOS BLOCK collection=extra_second old_site_references=1/);
+    assert.match(result.output, /UOS FAIL/);
+    assert.equal(result.writes.length, 0);
+});
+test('retained history does not exempt AP or certificate configuration', () => rejected(d => {
+    d.admin_activity_log = [{site_id: OLD}];
+    d.apgroup = [{site_id: OLD}]; d.ssl_inspection_certificate = [{site_id: OLD}];
+}));
 test('partial flag move', () => rejected(d => { delete d.site[0].attr_hidden_id; d.site[1].attr_hidden_id = 'default'; }));
 test('duplicate name', () => rejected(d => { d.site[1].name = 'default'; }));
 test('duplicate Default', () => rejected(d => { d.site[1].attr_hidden_id = 'default'; }));

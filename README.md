@@ -23,7 +23,9 @@ restore rehearsal and [controlled test plan](TESTING.md) before authorising writ
   unadopted records. The imported site must contain configuration records.
 - Site identities must be ObjectIds, names unique and flags in the expected state.
   All top-level `site_id` references must identify an existing site, as strings or
-  ObjectIds. Unknown collections referencing the existing Default block execution.
+  ObjectIds. Unknown collections referencing the existing Default block execution. Activity
+  history in `admin_activity_log` is retained and reported, including references
+  to the removed Default; it is never deleted or reassigned.
 - A quiet maintenance window and an already isolated destination that cannot
   contact managed devices or the source controller. No imports, UI changes,
   concurrent administrators, updates or scheduled configuration changes.
@@ -111,7 +113,7 @@ so the actual Mongo program can be tested independently. Execution:
 4. Deletes only snapshot-identified existing Default records in `setting`,
    `networkconf`, `wlanconf`, `wlangroup`, `usergroup`, `radiusprofile`, `dpigroup`
    and `privilege`. Each deletion is scoped to its identity and site reference,
-   checked individually and preceded by validation. Unknown references are refused.
+   checked individually and preceded by validation. Unknown references are refused; recognised activity history is retained.
 5. Deletes the old site, renames the imported site's internal name to `default`,
    restarts again and verifies the final topology.
 
@@ -123,8 +125,10 @@ never connects to a source controller.
 The migration remains **non-atomic**. Expected-state filters reduce races but cannot
 exclude application writes between checks. Reference checks cover top-level
 `site_id`, not every possible undocumented relationship. Strict checks may reject
-valid installations, including deployments with old history references or retained
-AP/certificate records. Investigate schema differences; do not expand deletion
+valid installations, including deployments with other history references or retained
+AP/certificate records. The sole retention exception is `admin_activity_log`
+references to this migration's existing Default identity; other orphan references
+remain errors. Investigate schema differences; do not expand deletion
 lists or remove guards without review and isolated tests. Read scans may be slow on
 large databases. Mongo transactions are reported but not used; they cannot cover
 the intervening service restart. There is no automatic rollback or resume.

@@ -15,6 +15,9 @@
     function ref(id) { return {$or: [{site_id: id}, {site_id: ObjectId(id)}]}; }
     var cleanup = ['setting', 'networkconf', 'wlanconf', 'wlangroup',
         'usergroup', 'radiusprofile', 'dpigroup', 'privilege'];
+    // Upstream intentionally retained activity history when deleting a site.
+    // Only references to this migration's old identity receive this exception.
+    var retainedHistory = ['admin_activity_log'];
     function inspect(stage) {
         var names = db.getCollectionNames();
         ['site', 'device', 'setting', 'networkconf', 'wlanconf'].forEach(function (name) {
@@ -62,7 +65,7 @@
                 old = {_id: ObjectId(oldIdentity)};
             }
         }
-        var oldId = hex(old._id), newId = hex(selected._id), config = 0;
+        var oldId = hex(old._id), newId = hex(selected._id), config = 0, unreviewed = [];
         names.forEach(function (name) {
             // Any unknown collection with references to the old Default is unsafe
             // to leave orphaned. No broad cleanup or inferred deletion is allowed.
@@ -73,13 +76,20 @@
                 if (typeof value === 'string' && /^[0-9a-f]{24}$/.test(value)) id = value;
                 else id = hex(value);
                 if (id === oldId && cleanup.indexOf(name) >= 0) hex(record._id);
+                if (id === oldId && retainedHistory.indexOf(name) >= 0) return;
                 if (!sites.some(function (s) { return hex(s._id) === id; })) reject('Orphan site reference in ' + name);
             });
             var count = collection.count(ref(oldId));
             if (name === 'device' && count !== 0) reject('Existing Default has device associations');
-            if (count && cleanup.indexOf(name) < 0) reject('Unreviewed Default references in ' + name);
+            if (count && retainedHistory.indexOf(name) >= 0) {
+                print('UOS RETAIN history=' + name + ' old_site_references=' + count + ' unchanged');
+            } else if (count && cleanup.indexOf(name) < 0) {
+                print('UOS BLOCK collection=' + name + ' old_site_references=' + count);
+                unreviewed.push(name);
+            }
             if (['setting', 'networkconf', 'wlanconf'].indexOf(name) >= 0) config += collection.count(ref(newId));
         });
+        if (unreviewed.length) reject('Unreviewed Default references in ' + unreviewed[0]);
         if (config < 1) reject('Imported site has no configuration records');
         if (stage === 'initial') print('UOS PLAN target=' + newId + ' old=' + oldId + ' configuration_records=' + config);
         if (stage === 'initial') print('UOS PLAN move flags; restart; delete scoped Default configuration and site; rename imported site; restart');
@@ -127,7 +137,7 @@
             });
             current = inspect('flags');
             current.names.forEach(function (name) {
-                if (db.getCollection(name).count(ref(oldIdentity)) !== 0) reject('Unexpected phase state');
+                if (retainedHistory.indexOf(name) < 0 && db.getCollection(name).count(ref(oldIdentity)) !== 0) reject('Unexpected phase state');
             });
             deleted(db.site.deleteOne(protectedSite(current.old), options));
             current = inspect('deleted');
