@@ -193,6 +193,40 @@ $(cat "$SCRIPT_DIR/migration.js")" 2>/dev/null) || fail "Database validation fai
   [[ $(printf '%s\n' "$out" | grep -c '^UOS READY$') == 1 ]] || fail "Preflight rejected the database state."
 }
 
+# Read attestation as data, never source it or evaluate its values.
+recovery_prerequisites() {
+  [[ -n ${RECOVERY_FILE:-} && -f $RECOVERY_FILE && ! -L $RECOVERY_FILE ]] || fail "A private recovery attestation is required; see RECOVERY.md."
+  [[ $(stat -c %u "$RECOVERY_FILE") == "$(id -u)" && $(stat -c %a "$RECOVERY_FILE") == 600 ]] || fail "Recovery attestation must be owned by you with mode 600."
+  local key value count=0 created=0 restored=0 now procedure
+  declare -A evidence=()
+  while IFS='=' read -r key value || [[ -n $key ]]; do
+    case "$key" in
+      checkpoint_id|checkpoint_sha256|created_utc|restored_utc|os_version|network_version|database|target_id|old_id|scope|restore_verified|isolation_verified|procedure_sha256) ;;
+      *) fail "Unknown recovery attestation field." ;;
+    esac
+    [[ -n $value && ! -v evidence[$key] ]] || fail "Missing or duplicate recovery attestation value."
+    evidence[$key]="$value"
+    count=$((count + 1))
+  done < "$RECOVERY_FILE"
+  [[ $count == 13 ]] || fail "Incomplete recovery attestation."
+  [[ ${evidence[checkpoint_id]} =~ ^[A-Za-z0-9_.:-]+$ &&
+     ${evidence[checkpoint_sha256]} =~ ^[0-9a-f]{64}$ ]] || fail "Invalid checkpoint identity/integrity evidence."
+  [[ ${evidence[restore_verified]} == yes && ${evidence[isolation_verified]} == yes &&
+     ${evidence[scope]} == full-destination-recovery ]] || fail "Restore rehearsal and isolation must be verified."
+  [[ ${evidence[os_version]} == "$OS_VERSION" && ${evidence[network_version]} == "$NETWORK_VERSION" &&
+     ${evidence[database]} == "$MONGO_DB" && ${evidence[target_id]} == "$TARGET_ID" &&
+     ${evidence[old_id]} == "$OLD_ID" ]] || fail "Recovery evidence does not match this migration."
+  [[ ${evidence[created_utc]} =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ &&
+     ${evidence[restored_utc]} =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || fail "Use UTC checkpoint/rehearsal timestamps."
+  created=$(date -u -d "${evidence[created_utc]}" +%s) || fail "Invalid checkpoint time."
+  restored=$(date -u -d "${evidence[restored_utc]}" +%s) || fail "Invalid restore time."
+  now=$(date -u +%s)
+  (( created <= restored && restored <= now && now - created <= 86400 )) || fail "Recovery checkpoint expired or rehearsal time invalid."
+  procedure=$(sha256sum "$SCRIPT_DIR/RECOVERY.md") || fail "Recovery procedure unavailable."
+  [[ ${evidence[procedure_sha256]} == "${procedure%% *}" ]] || fail "Recovery procedure checksum does not match."
+  ok "Restore-tested recovery checkpoint attested for this migration."
+}
+
 usage() {
   say "Usage: bash $0 --check [--site OBJECT_ID]"
 }
