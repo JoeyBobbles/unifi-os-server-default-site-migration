@@ -63,7 +63,10 @@ completed journal was verified). It is **not authorisation to migrate**: missing
 recovery/state-directory prerequisites and unknown versions are reported as
 warnings. Failed schema/topology checks or an explicitly supplied invalid recovery
 attestation return nonzero. Unknown application versions always block execution.
-Detected version numbers alone do not establish compatibility.
+OS Server discovery reads only `UOS_SERVER_VERSION` from the running container
+and `/var/lib/uosserver/server.conf`; conflicting values stop validation. A generic
+container image version is not used as an application version. Detected version
+numbers alone do not establish compatibility.
 
 ## Recovery and authorised execution
 

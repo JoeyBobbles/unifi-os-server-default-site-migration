@@ -207,20 +207,46 @@ find_mongo() {
   ok "Mongo: $MONGO_CLIENT, port $MONGO_PORT, database $MONGO_DB"
 }
 
-# Version sources are read only; no server executable is invoked for discovery.
+# Only the version key is returned; never source or print the host configuration.
+read_host_os_version() {
+  sudo "${SUDO_AUTH_ARGS[@]}" awk -F= '
+    $1 ~ /^[[:space:]]*UOS_SERVER_VERSION[[:space:]]*$/ {
+      sub(/^[^=]*=/, ""); gsub(/^[[:space:]]+|[[:space:]]+$/, ""); print
+    }' /var/lib/uosserver/server.conf 2>/dev/null
+}
+
+# The container image version is not the UniFi OS Server application version.
+# Read the explicit application version from the running container and installer.
 find_versions() {
-  OS_VERSION=$(as_svc inspect --format '{{index .Config.Labels "org.opencontainers.image.version"}}' "$CONTAINER" 2>/dev/null || true)
+  local host_version container_version
+  host_version=$(read_host_os_version || true)
+  container_version=$(in_container printenv UOS_SERVER_VERSION 2>/dev/null || true)
+  OS_VERSION=""
   # Package query syntax must reach dpkg-query literally.
   # shellcheck disable=SC2016
   NETWORK_VERSION=$(in_container dpkg-query -W '-f=${Version}' unifi 2>/dev/null || true)
   VERSIONS_KNOWN=1
   local pattern='^[0-9]+\.[0-9]+\.[0-9]+([+~:._a-zA-Z0-9-]*)?$'
-  if [[ $OS_VERSION =~ $pattern ]]; then
-    ok "UniFi OS Server version (container OCI label): $OS_VERSION"
-  else
-    OS_VERSION=""
+  if [[ -n $host_version && ! $host_version =~ $pattern ]] ||
+     [[ -n $container_version && ! $container_version =~ $pattern ]]; then
     VERSIONS_KNOWN=0
-    warn "UniFi OS Server version unavailable from container OCI label."
+    warn "Malformed or ambiguous UniFi OS Server version metadata; execution is blocked."
+  elif [[ -n $host_version && -n $container_version && $host_version != "$container_version" ]]; then
+    fail "Host and running container disagree on UniFi OS Server version; investigate before proceeding."
+  elif [[ -n $container_version || -n $host_version ]]; then
+    OS_VERSION="${container_version:-$host_version}"
+    if [[ -n $container_version && -n $host_version ]]; then
+      ok "UniFi OS Server version (host and running container agree): $OS_VERSION"
+    elif [[ -n $container_version ]]; then
+      ok "UniFi OS Server version (running container environment): $OS_VERSION"
+      warn "Host installer version metadata unavailable; independently verify the running version."
+    else
+      ok "UniFi OS Server version (host installer configuration): $OS_VERSION"
+      warn "Running container version metadata unavailable; independently verify the running version."
+    fi
+  else
+    VERSIONS_KNOWN=0
+    warn "UniFi OS Server version unavailable from host installer configuration and running container environment."
   fi
   if [[ $NETWORK_VERSION =~ $pattern ]]; then
     ok "UniFi Network version (package metadata): $NETWORK_VERSION"

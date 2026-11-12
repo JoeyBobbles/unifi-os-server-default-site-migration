@@ -69,8 +69,10 @@ code first. Preserve the source controller and managed devices untouched.
    while preserving the imported identity and its records. Record private counts
    per collection, identities, flags and representative configuration values.
 5. Identify the exact OS Server, Network, Mongo and shell versions independently.
-   Version discovery currently uses the container OCI version label and Network's
-   package metadata; missing or misleading metadata needs investigation. Do not
+   OS Server version discovery uses `UOS_SERVER_VERSION` in the running container
+   and host installer configuration; values must agree when both are available.
+   Network discovery uses its package metadata. Missing or misleading metadata
+   needs investigation. Do not
    invent a version or pass an override to enable execution.
 6. Establish the checkpoint and perform the isolated restore rehearsal described
    in [RECOVERY.md](RECOVERY.md). Restoration is a separate, authorised lab action;
@@ -79,8 +81,8 @@ code first. Preserve the source controller and managed devices untouched.
    --recovery ...`. Confirm isolation and the quiet maintenance window. Stop here
    until explicit destructive-test authorisation has been granted.
 
-Development validation passed 86 synthetic cases: 44 Mongo-program cases, eight
-environment cases, four version diagnostic cases, five sudo compatibility cases,
+Development validation passed 90 synthetic cases: 44 Mongo-program cases, eight
+environment cases, eight version diagnostic cases, five sudo compatibility cases,
 eight recovery cases, five journal cases and 12 Bash execution cases. Bash syntax checks, ShellCheck and JavaScript
 syntax checks also passed.
 
