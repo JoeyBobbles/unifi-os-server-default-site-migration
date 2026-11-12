@@ -65,13 +65,13 @@ trap 'printf "\n"; warn "Stopped by user during: $STEP"; exit 130' INT
 # that account cannot read ("cannot chdir ... Permission denied"), so always
 # run from /tmp.
 as_svc() {
-  (cd /tmp && sudo -u "$SVC_USER" XDG_RUNTIME_DIR="/run/user/$SVC_UID" podman "$@" </dev/null)
+  (cd /tmp && sudo -n -H -u "$SVC_USER" XDG_RUNTIME_DIR="/run/user/$SVC_UID" podman --remote=false "$@" </dev/null)
 }
 
 in_container() { as_svc exec "$CONTAINER" "$@"; }
 
 mongo_js() {
-  in_container "$MONGO_CLIENT" --quiet --port "$MONGO_PORT" "$MONGO_DB" --eval "$1"
+  in_container "$MONGO_CLIENT" --norc --quiet --host localhost --port "$MONGO_PORT" "$MONGO_DB" --eval "$1"
 }
 
 # ----------------------------------------------------------------------------
@@ -79,9 +79,10 @@ mongo_js() {
 # ----------------------------------------------------------------------------
 
 check_basics() {
-  :
+  [[ $(uname -s) == Linux ]] || fail "Linux is required."
+  case $(uname -m) in x86_64|aarch64) ;; *) fail "Unsupported architecture." ;; esac
   local cmd
-  for cmd in sudo systemctl ps getent id awk grep; do
+  for cmd in sudo systemctl id awk grep stat sed tail head uname cat dirname podman; do
     command -v "$cmd" >/dev/null 2>&1 || fail "Required command not found: $cmd"
   done
   sudo -n true </dev/null || fail "Authenticate with sudo -v before running this script."
@@ -89,82 +90,43 @@ check_basics() {
 }
 
 service_running() {
-  local out
-  out=$(systemctl status "$UNIT" --no-pager 2>/dev/null </dev/null)
-  [[ $out == *"active (running)"* ]]
+  [[ $(systemctl show "$UNIT" -p ActiveState --value 2>/dev/null) == active &&
+     $(systemctl show "$UNIT" -p SubState --value 2>/dev/null) == running ]]
 }
 
 find_service_unit() {
-  local units files
-  units=$(systemctl list-unit-files 'uosserver*.service' --no-legend 2>/dev/null </dev/null \
-    | awk '{print $1}' | grep -v -- '-updater' || true)
-  if [[ $(count_lines "$units") -eq 1 ]]; then
-    UNIT="${units%.service}"
-  elif printf '%s\n' "$units" | grep -qx 'uosserver.service'; then
-    UNIT="uosserver"
-  else
-    # Fallback: any unit that starts the UniFi OS Server binary.
-    files=$(grep -l '/var/lib/uosserver/bin/uosserver-service' \
-      /etc/systemd/system/*.service /lib/systemd/system/*.service /usr/lib/systemd/system/*.service 2>/dev/null \
-      | grep -v -- '-updater' | head -n1 || true)
-    [[ -n $files ]] || fail "No UniFi OS Server systemd unit found. Is UniFi OS Server installed on this machine?"
-    UNIT=$(basename "$files" .service)
-  fi
-  service_running || fail "$UNIT is not active (running). Check: systemctl status $UNIT --no-pager"
-  ok "Service unit: $UNIT (active, running)"
+  local units
+  units=$(systemctl list-unit-files 'uosserver*.service' --no-legend 2>/dev/null \
+    | awk '$1 !~ /-updater/ {print $1}') || fail "Cannot enumerate service units."
+  [[ $(count_lines "$units") == 1 ]] || fail "Expected one UniFi OS Server unit."
+  UNIT="$units"
+  service_running || fail "UniFi OS Server is not running."
+  ok "UniFi OS Server service active."
 }
 
 find_service_user() {
-  local owners owner candidates
-  # ps provides account ownership; no process selection or signalling occurs.
-  # shellcheck disable=SC2009
-  owners=$(ps -eo user,pid,comm | grep -Ei 'podman|conmon|catatonit' \
-    | awk '{print $1}' | grep -vx root | sort -u || true)
-  candidates=$(getent passwd </dev/null | grep -Ei 'unifi|uos' | cut -d: -f1 || true)
-  SVC_USER=""
-
-  if [[ $(count_lines "$owners") -eq 1 ]]; then
-    owner="${owners%+}"
-    if [[ $owner =~ ^[0-9]+$ ]]; then
-      # ps printed a numeric UID instead of a name.
-      SVC_USER=$(getent passwd "$owner" </dev/null | cut -d: -f1 || true)
-    else
-      # ps may truncate long names, e.g. "uosserv+".
-      local match
-      match=$(printf '%s\n' "$candidates" | awk -v o="$owner" 'index($0, o) == 1')
-      [[ $(count_lines "$match") -eq 1 ]] && SVC_USER="$match"
-    fi
-  fi
-  if [[ -z $SVC_USER ]] && printf '%s\n' "$candidates" | grep -qx 'uosserver'; then
-    SVC_USER="uosserver"
-  fi
-  [[ -n $SVC_USER ]] || fail "Could not find the account that runs the UniFi OS Server containers."
-
-  SVC_UID=$(id -u "$SVC_USER" 2>/dev/null) || fail "Could not get the UID of $SVC_USER."
-  ls -d "/run/user/$SVC_UID" >/dev/null 2>&1 || fail "Runtime directory /run/user/$SVC_UID does not exist."
-  ok "Service account: $SVC_USER (UID $SVC_UID)"
+  local configured
+  configured=$(systemctl show "$UNIT" -p User --value 2>/dev/null) || fail "Cannot inspect service account."
+  # Some installations have a root supervisor and a dedicated container account.
+  SVC_USER="${configured:-uosserver}"
+  [[ $SVC_USER != root ]] || SVC_USER=uosserver
+  [[ $SVC_USER =~ ^[a-z_][a-z0-9_-]*$ ]] || fail "Unsupported service account."
+  SVC_UID=$(id -u "$SVC_USER" 2>/dev/null) || fail "Service account not found."
+  [[ $SVC_UID != 0 && -d /run/user/$SVC_UID &&
+     $(stat -c %u "/run/user/$SVC_UID") == "$SVC_UID" ]] || fail "Unsupported rootless runtime directory."
+  [[ $(as_svc info --format '{{.Host.Security.Rootless}}' 2>/dev/null) == true ]] || fail "Rootless Podman is required."
+  ok "Local rootless Podman connectivity verified."
 }
 
 find_container() {
   local rows names pick
-  rows=$(as_svc ps --format "{{.Names}}\t{{.Image}}" 2>&1) || { say "$rows"; fail "podman ps failed as $SVC_USER."; }
+  rows=$(as_svc ps --format "{{.Names}}\t{{.Image}}" 2>&1) || fail "Podman container enumeration failed."
   names=$(printf '%s\n' "$rows" | awk 'NF {print $1}')
-  [[ $(count_lines "$names") -gt 0 ]] || fail "No running containers found for $SVC_USER."
-
-  pick=$(printf '%s\n' "$rows" | awk 'NF && $2 ~ /uosserver/ {print $1}')
-  if [[ $(count_lines "$pick") -ne 1 ]]; then
-    if printf '%s\n' "$names" | grep -qx 'uosserver'; then
-      pick="uosserver"
-    elif [[ $(count_lines "$names") -eq 1 ]]; then
-      pick="$names"
-    else
-      say "$rows"
-      fail "Could not tell which container is UniFi OS Server."
-    fi
-  fi
+  [[ $(count_lines "$names") -gt 0 ]] || fail "No running containers found."
+  pick=$(printf '%s\n' "$rows" | awk 'NF && $2 ~ /(^|\/)uosserver([:@]|$)/ {print $1}')
+  [[ $(count_lines "$pick") == 1 ]] || fail "Expected one identifiable UniFi OS Server container."
   CONTAINER="$pick"
-  CONTAINER_IMAGE=$(printf '%s\n' "$rows" | awk -v c="$CONTAINER" '$1 == c {print $2; exit}')
-  ok "Container: $CONTAINER (${CONTAINER_IMAGE:-image unknown})"
+  ok "UniFi OS Server container identified."
 }
 
 find_mongo() {
@@ -176,7 +138,10 @@ find_mongo() {
 
   # The UniFi Network app's own settings name its database and port.
   MONGO_PORT="27117"; MONGO_DB="ace"
-  props=$(in_container cat /usr/lib/unifi/data/system.properties 2>/dev/null || true)
+  props=$(in_container cat /usr/lib/unifi/data/system.properties 2>/dev/null) || fail "Cannot read Network database settings."
+  if printf '%s\n' "$props" | grep -Eq '^[[:space:]]*(db\.mongo\.(uri|host|port|user|password)|unifi\.db\.(uri|host|user|password))[[:space:]]*='; then
+    fail "Custom database connectivity is unsupported."
+  fi
   if [[ -n $props ]]; then
     value=$(printf '%s\n' "$props" | sed -n 's/^[[:space:]]*unifi\.db\.port[[:space:]]*=[[:space:]]*\([0-9]*\).*/\1/p' | tail -n1)
     [[ -n $value ]] && MONGO_PORT="$value"
@@ -187,10 +152,34 @@ find_mongo() {
     fi
   fi
 
+  [[ $MONGO_PORT =~ ^[0-9]{1,5}$ && $MONGO_PORT -gt 0 && $MONGO_PORT -le 65535 ]] || fail "Invalid Mongo port."
   local out
-  out=$(mongo_js 'print("UOSDB " + db.getName())' 2>&1)
-  [[ $out == *"UOSDB $MONGO_DB"* ]] || { say "$out"; fail "Could not open database $MONGO_DB on port $MONGO_PORT."; }
+  out=$(mongo_js 'if (db.runCommand({ping:1}).ok === 1) print("UOSDB " + db.getName());' 2>/dev/null) || fail "Mongo connection failed."
+  [[ $out == *"UOSDB $MONGO_DB"* ]] || fail "Could not open the Network database."
   ok "Mongo: $MONGO_CLIENT, port $MONGO_PORT, database $MONGO_DB"
+}
+
+# Version sources are read only; no server executable is invoked for discovery.
+find_versions() {
+  OS_VERSION=$(as_svc inspect --format '{{index .Config.Labels "org.opencontainers.image.version"}}' "$CONTAINER" 2>/dev/null || true)
+  # Package query syntax must reach dpkg-query literally.
+  # shellcheck disable=SC2016
+  NETWORK_VERSION=$(in_container dpkg-query -W '-f=${Version}' unifi 2>/dev/null || true)
+  VERSIONS_KNOWN=1
+  local version
+  for version in "$OS_VERSION" "$NETWORK_VERSION"; do
+    [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+([+~:._a-zA-Z0-9-]*)?$ ]] || VERSIONS_KNOWN=0
+  done
+  if (( VERSIONS_KNOWN )); then
+    ok "Versions: UniFi OS Server $OS_VERSION; UniFi Network $NETWORK_VERSION"
+    warn "Versions are informational; schema checks and a restore rehearsal are required."
+  else
+    warn "Unknown application version; execution is blocked. Verify image labels and Network package metadata."
+  fi
+  local out
+  out=$(mongo_js 'var r=db.adminCommand({isMaster:1}); var b=db.adminCommand({buildInfo:1}); if(r.ok===1 && b.ok===1 && /^[0-9.]+$/.test(b.version)) print("UOS CAP mongo="+b.version+" transactions="+((r.setName || r.msg==="isdbgrid") && r.logicalSessionTimeoutMinutes!==undefined ? "possible-unvalidated" : "unavailable"));' 2>/dev/null) || fail "Cannot inspect Mongo capabilities."
+  [[ $out == *"UOS CAP "* ]] || fail "Unsupported Mongo capability response."
+  printf '%s\n' "$out" | grep '^UOS CAP '
 }
 
 # ----------------------------------------------------------------------------
@@ -225,6 +214,7 @@ main() {
   find_service_user
   find_container
   find_mongo
+  find_versions
   step "Preflight (read only)"
   validate_sites
   ok "Preflight passed. No database writes or service restarts performed."
