@@ -1,72 +1,155 @@
-# unifi-os-server-default-site-migration
+# UniFi OS Server Default Site Migration
 
-Make an imported site the **default** site on a self-hosted **UniFi OS Server** (Linux). The script removes the old empty "Default" site, so your site is the only one left.
+Promote an imported site to the internal Default site on self-hosted Linux
+UniFi OS Server. This fork hardens the
+[original project](https://github.com/tcptyler/unifi-os-server-default-site-migration)
+with read-only checks, strict selection, recovery prerequisites and guarded writes.
 
-> [!WARNING]
-> This script edits the UniFi Network database directly. That is **not supported by Ubiquiti**, may break with future updates, and is used **at your own risk**.
+**Experimental and unsupported by Ubiquiti.** Direct database edits can lose
+configuration or break after an update. Automated tests use synthetic data; they
+do not establish compatibility with a real installation. Complete the isolated
+restore rehearsal and [controlled test plan](TESTING.md) before authorising writes.
 
-> [!IMPORTANT]
-> Running the script is **not the last step**. Afterward you still have to move your devices from the old server. See [After the script: finish the migration](#after-the-script-finish-the-migration-required).
+## Requirements
 
-## Why
+- Linux with systemd, Bash 5+, GNU coreutils, util-linux `flock`, and local rootless
+  Podman on x86-64 or ARM64. `sudo` must support `-N` (do not refresh credentials).
+- Exactly one identifiable running `uosserver` service/container and its non-root
+  service account. A root supervisor may use the dedicated `uosserver` account.
+- Local MongoDB and `mongo` or `mongosh` in the container. Custom authentication,
+  remote databases, alternate database searches and ambiguous discovery are refused.
+- One system site (`super`), one existing Default and one imported site. The
+  existing Default must have **zero device associations**, including offline or
+  unadopted records. The imported site must contain configuration records.
+- Site identities must be ObjectIds, names unique and flags in the expected state.
+  All top-level `site_id` references must identify an existing site, as strings or
+  ObjectIds. Unknown collections referencing the existing Default block execution.
+- A quiet maintenance window and an already isolated destination that cannot
+  contact managed devices or the source controller. No imports, UI changes,
+  concurrent administrators, updates or scheduled configuration changes.
 
-When you move a site to a new UniFi OS Server with **Export Site** / **Import Site**, the new server ends up with two sites: its own **Default** plus your imported site. The Default site cannot be deleted from the UI, and there is no supported way to make a different site the default. This script does both for you.
+## Read-only validation
 
-## Before you start
+Review and save the repository locally. Keep the Bash script, `migration.js` and
+`RECOVERY.md` together. Do not pipe downloaded code into a shell or paste the
+original here-document wrapper. Run as an administrator with sudo access:
 
-- UniFi OS Server installed on Linux with the official installer.
-- Your site is already imported: enable **Multi-Site Management** (**Settings > System > Site Management**), then site switcher > **Import Site**.
-- An SSH session on the server as a user with `sudo`.
-- Best on a fresh UniFi OS Server install that holds only the Default site and your imported site.
-
-## How to use
-
-Run this in an SSH session on the server. It downloads the script and runs it without saving it:
-
+```bash
+sudo -v
+bash unifi-os-server-default-site-migration.sh --check
 ```
-bash <(curl -fsSL https://raw.githubusercontent.com/tcptyler/unifi-os-server-default-site-migration/main/unifi-os-server-default-site-migration.sh)
+
+The report enumerates site ObjectIds and internal names, identifies Default and
+the candidate, describes the planned operations, reports versions and Mongo
+transaction capability, and lists validation failures. To verify a specific site,
+replace the synthetic ObjectId below with the imported site's reported identity:
+
+```bash
+bash unifi-os-server-default-site-migration.sh --check \
+  --site 222222222222222222222222
 ```
 
-Run it as your normal user, not with `sudo` in front. The script asks for your `sudo` password itself. Then answer the prompts.
+No mode defaults to execution: omitting a mode also runs read-only checks. `--check`
+never issues database writes, creates a journal/lock or restarts services. It does
+not refresh sudo timestamps. Normal system auditing and vendor/runtime logging can
+still occur when commands or reads are performed.
 
-**Or copy and paste:** open [`unifi-os-server-default-site-migration.sh`](unifi-os-server-default-site-migration.sh), copy **all** of it, from the first line (`bash <<'UOS_EOF'`) to the last line (`UOS_EOF`), and paste it into your SSH session. You can also save the file on the server and run `bash unifi-os-server-default-site-migration.sh`.
+Exit status `0` means the read-only topology/schema checks passed (or an existing
+completed journal was verified). It is **not authorisation to migrate**: missing
+recovery/state-directory prerequisites and unknown versions are reported as
+warnings. Failed schema/topology checks or an explicitly supplied invalid recovery
+attestation return nonzero. Unknown application versions always block execution.
+Detected version numbers alone do not establish compatibility.
 
-## After the script: finish the migration (required)
+## Recovery and authorised execution
 
-> [!IMPORTANT]
-> The script only fixes the sites. **Your devices are still on the old server** until you do these steps.
+Follow [RECOVERY.md](RECOVERY.md) to establish and actually restore-test the exact
+checkpoint. A site export alone is insufficient. Prepare the private attestation
+and a persistent private directory outside the checkout, owned by the invoking
+account with mode `700`. Use the **same directory and operator for every attempt
+on this destination**, including read-only checks; never bypass a journal with a
+new directory. Do not use `/tmp` for operational recovery evidence or journals.
 
-1. **Check the new server.** In the UniFi Network UI, your site should be the only one, and its networks, WiFi networks and device records should all be there.
-2. **Move your devices.** On the old server, select your site, open **Settings > System > Site Management > Export Site** again, skip the export, and go to the device migration step. Enter the new UniFi OS Server's inform address (copy it on the new server's **Overview** tab, where the site status is shown). Your devices move over without re-adoption, because the site export already carried their device records.
-3. **Confirm every device shows Connected** on the new server.
+After creating those private files, validate them without writing database state:
 
-## What it does
+```bash
+bash unifi-os-server-default-site-migration.sh --check \
+  --site 222222222222222222222222 \
+  --state-dir "$MIGRATION_STATE_DIR" --recovery "$RECOVERY_ATTESTATION"
+```
 
-1. **Finds everything on its own:** the UniFi OS Server service, the account that runs its containers, the container, the Mongo client, and the UniFi Network database and port.
-2. **Lists your sites.** The hidden system site is not shown. The current Default is shown greyed out and cannot be picked. You pick your site by number and confirm.
-3. **Moves the default flags** from the old Default site to your site, checks the result, then restarts UniFi OS Server.
-4. **Deletes the old Default site** and its configuration: settings, networks, WiFi networks and groups, user groups, RADIUS profiles, DPI groups and admin privileges for that site.
-5. **Renames your site's internal name** to `default`.
-6. **Turns off Multi-Site Management** if your site is now the only one.
-7. **Restarts UniFi OS Server** again.
-8. **Asks you to confirm** that you see only your site in the UI. If you don't, it checks the service and the database and tells you what is different.
-9. **Prints the steps to finish the migration** (see above), so you know you are not done yet.
+Set the shell variables locally to absolute paths outside the repository. They
+must refer to the existing directory and the attestation file (mode `600`). After
+explicit authorisation for the destructive maintenance procedure only:
 
-If no site besides Default is found, the script asks whether you imported it. If you did, it checks again and searches the other databases. If you didn't, it tells you to import it and rerun the script.
+```bash
+bash unifi-os-server-default-site-migration.sh --execute \
+  --site 222222222222222222222222 \
+  --state-dir "$MIGRATION_STATE_DIR" --recovery "$RECOVERY_ATTESTATION"
+```
 
-## Good to know
+Execution requires three keyboard confirmations: the exact imported ObjectId,
+`DELETE EMPTY DEFAULT`, and `RESTORE VERIFIED`. Piped input cannot confirm them.
+A new journal is persisted before any database change. An existing journal blocks
+execution even if it describes a successful run. Use `--check` with that same state
+directory to verify completed runs; interrupted/failed journals require recovery.
+A single Default without a journal is recognised conservatively as already Default
+or a missing import, never treated as proof of a successful past migration.
 
-- Each restart restarts **every** application on the UniFi OS Server, not only UniFi Network.
-- Every change to a site must affect exactly one site, or the script stops and says which step failed.
-- The hidden system site (`super`) is never changed.
-- The old Default is removed the same way a delete in the UniFi UI removes a site. Like the UI, it leaves history (activity log, alerts, topology snapshot) and a few records the UI also keeps (the "All APs" group and the site's generated SSL certificate). Unlike the UI, it does not add "removed" entries to the activity log.
+## Changes and boundaries
 
-## Tested on
+The original discovery helpers and flag/restart/delete/rename sequence are retained
+where appropriate. Database validation and scoped operations live in `migration.js`
+so the actual Mongo program can be tested independently. Execution:
 
-UniFi OS Server 5.1.42 (linux-arm64), official installer, on Ubuntu 26.04.1 LTS, with a site imported from another server. Windows and macOS installs are not supported.
+1. Revalidates topology and recovery evidence after confirmations and locking.
+2. Removes the existing Default's protection flags and sets them on the imported
+   site with expected-state filters and checked, journaled acknowledgements.
+3. Restarts UniFi OS Server and checks service state and Mongo availability.
+4. Deletes only snapshot-identified existing Default records in `setting`,
+   `networkconf`, `wlanconf`, `wlangroup`, `usergroup`, `radiusprofile`, `dpigroup`
+   and `privilege`. Each deletion is scoped to its identity and site reference,
+   checked individually and preceded by validation. Unknown references are refused.
+5. Deletes the old site, renames the imported site's internal name to `default`,
+   restarts again and verifies the final topology.
+
+Both restarts affect **all applications** on UniFi OS Server. Global Multi-Site
+Management settings are left to the operator through the UI. This script never
+changes inform addresses or adopts, forgets, provisions or moves devices, and
+never connects to a source controller.
+
+The migration remains **non-atomic**. Expected-state filters reduce races but cannot
+exclude application writes between checks. Reference checks cover top-level
+`site_id`, not every possible undocumented relationship. Strict checks may reject
+valid installations, including deployments with old history references or retained
+AP/certificate records. Investigate schema differences; do not expand deletion
+lists or remove guards without review and isolated tests. Read scans may be slow on
+large databases. Mongo transactions are reported but not used; they cannot cover
+the intervening service restart. There is no automatic rollback or resume.
+
+Mongo shell startup files are disabled, and mongosh automatic write retries are
+disabled. Legacy ObjectId representations are validated explicitly.
+
+Logs contain UTC time, phase, validation results, scoped operation counters,
+restart results, failures and final status. Execution appends them to the private
+`journal` and flushes it before proceeding. A forced termination may leave only a
+phase marker; treat all unacknowledged writes as uncertain. Keep logs, backups,
+attestations and exports local and out of version control. Raw database errors,
+complete documents, descriptions and credentials are not printed.
+
+## Development and verification
+
+Read [AUDIT.md](AUDIT.md) for the original risks, [RECOVERY.md](RECOVERY.md) for
+restore requirements and [TESTING.md](TESTING.md) for reproducible tests and the
+separately authorised destructive procedure. Node.js 18+ and Python 3 are required
+only for development tests; the migration adds no host language runtime dependency.
 
 ## Credits
 
-Based on the Ubiquiti Community Wiki guide [Changing the Default Site in UniFi](https://ubntwiki.com/guides/changing_the_default_site_in_unifi), which credits @ckd in the unofficial Ubiquiti Discord. That guide is written for the standalone UniFi Network application; this script adapts it for UniFi OS Server, where UniFi Network runs in a rootless podman container.
+Original implementation by the upstream project. Based on the Ubiquiti Community
+Wiki guide [Changing the Default Site in UniFi](https://ubntwiki.com/guides/changing_the_default_site_in_unifi),
+which credits @ckd in the unofficial Ubiquiti Discord. The guide targets standalone
+UniFi Network; the original script adapts it for UniFi OS Server and rootless Podman.
+Existing upstream attribution is retained.
 
 Not affiliated with or endorsed by Ubiquiti Inc. UniFi is a trademark of Ubiquiti Inc.
