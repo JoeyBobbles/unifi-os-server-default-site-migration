@@ -142,10 +142,26 @@ test('all unreviewed Default reference collections reported together', () => {
     assert.match(result.output, /UOS FAIL/);
     assert.equal(result.writes.length, 0);
 });
-test('retained history does not exempt AP or certificate configuration', () => rejected(d => {
-    d.admin_activity_log = [{site_id: OLD}];
-    d.apgroup = [{site_id: OLD}]; d.ssl_inspection_certificate = [{site_id: OLD}];
-}));
+for (const name of ['alert', 'time_machine_infrastructure_snapshot', 'apgroup', 'ssl_inspection_certificate']) {
+    test('upstream retained records survive all phases: ' + name, () => {
+        const d = fixture();
+        d[name] = [{site_id: OLD, payload: 'synthetic'}, {site_id: ObjectId(OLD)}, {site_id: TARGET}];
+        const before = JSON.stringify(d[name]);
+        const check = run(d);
+        assert.match(check.output, /UOS RETAIN/);
+        assert.match(check.output, /UOS READY/);
+        assert.equal(check.writes.length, 0);
+        assert.match(run(d, TARGET, 'flags').output, /UOS READY/);
+        const cleanup = run(d, TARGET, 'cleanup');
+        assert.match(cleanup.output, /UOS READY/);
+        assert.equal(cleanup.writes.includes(name), false);
+        assert.match(run(d, TARGET, 'verify').output, /UOS READY/);
+        assert.equal(JSON.stringify(d[name]), before);
+    });
+    test('unrelated orphan retained records are still blocked: ' + name, () => rejected(d => {
+        d[name] = [{site_id: '777777777777777777777777'}];
+    }));
+}
 test('scheduled task summary reports metadata and still blocks migration', () => {
     const d = fixture();
     d.scheduletask = [{site_id: OLD, action: 'upgrade', enabled: true, attr_hidden: true,

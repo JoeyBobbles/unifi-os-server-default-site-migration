@@ -28,7 +28,7 @@ Coverage includes successful read-only validation and promotion, missing/additio
 sites, invalid selections, duplicate flags/names, protected system identities,
 string/ObjectId device associations, missing imported configuration, orphan and
 unsupported references, unknown Default references, invalid cleanup identities,
-retained activity history (including completed verification), rejected unrelated
+upstream retained history/AP-group/certificate records (including completed verification), rejected unrelated
 history orphans, bounded/redacted scheduled-task diagnostics,
 legacy and modern ObjectId conversion, shell startup/retry options,
 version/capability discovery failures, recovery evidence rejection, exclusive
@@ -82,7 +82,7 @@ code first. Preserve the source controller and managed devices untouched.
    --recovery ...`. Confirm isolation and the quiet maintenance window. Stop here
    until explicit destructive-test authorisation has been granted.
 
-Development validation passed 99 synthetic cases: 47 Mongo-program cases, eight
+Development validation passed 106 synthetic cases: 54 Mongo-program cases, eight
 environment cases, 14 version diagnostic cases, five sudo compatibility cases,
 eight recovery cases, five journal cases and 12 Bash execution cases. Bash syntax checks, ShellCheck and JavaScript
 syntax checks also passed.

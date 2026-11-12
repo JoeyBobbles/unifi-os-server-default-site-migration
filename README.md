@@ -23,9 +23,11 @@ restore rehearsal and [controlled test plan](TESTING.md) before authorising writ
   unadopted records. The imported site must contain configuration records.
 - Site identities must be ObjectIds, names unique and flags in the expected state.
   All top-level `site_id` references must identify an existing site, as strings or
-  ObjectIds. Unknown collections referencing the existing Default block execution. Activity
-  history in `admin_activity_log` is retained and reported, including references
-  to the removed Default; it is never deleted or reassigned.
+  ObjectIds. Unknown collections referencing the existing Default block execution.
+  The upstream retention policy is preserved for `admin_activity_log`, `alert`,
+  `time_machine_infrastructure_snapshot`, `apgroup` and
+  `ssl_inspection_certificate`. Their records and original site references remain
+  unchanged and are reported explicitly.
 - A quiet maintenance window and an already isolated destination that cannot
   contact managed devices or the source controller. No imports, UI changes,
   concurrent administrators, updates or scheduled configuration changes.
@@ -130,11 +132,11 @@ never connects to a source controller.
 The migration remains **non-atomic**. Expected-state filters reduce races but cannot
 exclude application writes between checks. Reference checks cover top-level
 `site_id`, not every possible undocumented relationship. Strict checks may reject
-valid installations, including deployments with other history references or retained
-AP/certificate records. The sole retention exception is `admin_activity_log`
-references to this migration's existing Default identity; other orphan references
-remain errors. Blocked scheduled tasks produce a limited read-only summary of
-recognised actions, boolean flags and target counts. They remain blocked; the
+valid installations with other history references or schema differences. Retention exceptions apply only to the five explicitly listed
+collections referencing this migration's existing Default identity; other orphan
+references remain errors. These exceptions restore the upstream retention policy,
+not a claim of vendor-supported compatibility. Blocked scheduled tasks produce a
+limited read-only summary of recognised actions, boolean flags and target counts. They remain blocked; the
 summary does not authorise removal or retention. Investigate schema differences; do not expand deletion
 lists or remove guards without review and isolated tests. Read scans may be slow on
 large databases. Mongo transactions are reported but not used; they cannot cover

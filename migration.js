@@ -17,7 +17,11 @@
         'usergroup', 'radiusprofile', 'dpigroup', 'privilege'];
     // Upstream intentionally retained activity history when deleting a site.
     // Only references to this migration's old identity receive this exception.
-    var retainedHistory = ['admin_activity_log'];
+    var retainedHistory = ['admin_activity_log', 'alert', 'time_machine_infrastructure_snapshot'];
+    // These residual collections were also explicitly retained by upstream's
+    // observed UI deletion policy. Keep their documents and original site IDs.
+    var retainedConfiguration = ['apgroup', 'ssl_inspection_certificate'];
+    var retainedRecords = retainedHistory.concat(retainedConfiguration);
     function reportScheduledTasks(collection, oldId) {
         var index = 0;
         collection.find(ref(oldId)).forEach(function (task) {
@@ -95,13 +99,14 @@
                 if (typeof value === 'string' && /^[0-9a-f]{24}$/.test(value)) id = value;
                 else id = hex(value);
                 if (id === oldId && cleanup.indexOf(name) >= 0) hex(record._id);
-                if (id === oldId && retainedHistory.indexOf(name) >= 0) return;
+                if (id === oldId && retainedRecords.indexOf(name) >= 0) return;
                 if (!sites.some(function (s) { return hex(s._id) === id; })) reject('Orphan site reference in ' + name);
             });
             var count = collection.count(ref(oldId));
             if (name === 'device' && count !== 0) reject('Existing Default has device associations');
-            if (count && retainedHistory.indexOf(name) >= 0) {
-                print('UOS RETAIN history=' + name + ' old_site_references=' + count + ' unchanged');
+            if (count && retainedRecords.indexOf(name) >= 0) {
+                var category = retainedHistory.indexOf(name) >= 0 ? 'history' : 'residual_configuration';
+                print('UOS RETAIN ' + category + '=' + name + ' old_site_references=' + count + ' unchanged');
             } else if (count && cleanup.indexOf(name) < 0) {
                 print('UOS BLOCK collection=' + name + ' old_site_references=' + count);
                 unreviewed.push(name);
@@ -157,7 +162,7 @@
             });
             current = inspect('flags');
             current.names.forEach(function (name) {
-                if (retainedHistory.indexOf(name) < 0 && db.getCollection(name).count(ref(oldIdentity)) !== 0) reject('Unexpected phase state');
+                if (retainedRecords.indexOf(name) < 0 && db.getCollection(name).count(ref(oldIdentity)) !== 0) reject('Unexpected phase state');
             });
             deleted(db.site.deleteOne(protectedSite(current.old), options));
             current = inspect('deleted');
