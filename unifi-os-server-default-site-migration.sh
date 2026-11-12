@@ -218,9 +218,16 @@ read_host_os_version() {
 # The container image version is not the UniFi OS Server application version.
 # Read the explicit application version from the running container and installer.
 find_versions() {
-  local host_version container_version
+  local host_version container_version app_version app_model
   host_version=$(read_host_os_version || true)
   container_version=$(in_container printenv UOS_SERVER_VERSION 2>/dev/null || true)
+  app_model=$(in_container printenv APP_MODEL 2>/dev/null || true)
+  app_version=$(in_container printenv APP_VERSION 2>/dev/null || true)
+  if [[ -n $app_version ]]; then
+    [[ $app_model == UOSSERVER ]] || fail "APP_VERSION requires APP_MODEL=UOSSERVER; unexpected application metadata."
+    [[ -z $container_version || $container_version == "$app_version" ]] || fail "Container application version fields disagree; investigate before proceeding."
+    container_version="$app_version"
+  fi
   OS_VERSION=""
   # Package query syntax must reach dpkg-query literally.
   # shellcheck disable=SC2016

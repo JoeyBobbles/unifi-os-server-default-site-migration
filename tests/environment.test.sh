@@ -28,11 +28,17 @@ find_container
 if (ROWS='unrelated localhost/other:synthetic'; find_container); then exit 1; fi
 if (ROWS=$'first localhost/uosserver:synthetic\nsecond localhost/uosserver:synthetic'; find_container); then exit 1; fi
 read_host_os_version() { echo 9.9.9; }
-in_container() { echo 9.9.9; }
+in_container() {
+  if [[ $1 == printenv ]]; then
+    case "$2" in APP_MODEL) echo UOSSERVER ;; *) echo 9.9.9 ;; esac
+  else echo 9.9.9; fi
+}
 mongo_js() { echo 'UOS CAP mongo=9.9.9 transactions=unavailable'; }
 find_versions
 [[ $VERSIONS_KNOWN == 1 ]]
-in_container() { echo unknown; }
+in_container() {
+  if [[ $1 == printenv && $2 == APP_MODEL ]]; then echo UOSSERVER; else echo unknown; fi
+}
 find_versions
 [[ $VERSIONS_KNOWN == 0 ]]
 # Called indirectly by find_versions before reloading the original functions.

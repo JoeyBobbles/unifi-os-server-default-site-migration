@@ -70,8 +70,8 @@ code first. Preserve the source controller and managed devices untouched.
    while preserving the imported identity and its records. Record private counts
    per collection, identities, flags and representative configuration values.
 5. Identify the exact OS Server, Network, Mongo and shell versions independently.
-   OS Server version discovery uses `UOS_SERVER_VERSION` in the running container
-   and host installer configuration; values must agree when both are available.
+   OS Server version discovery uses `APP_VERSION` with `APP_MODEL=UOSSERVER`, or
+   legacy `UOS_SERVER_VERSION` in the running container and installer configuration; values must agree when both are available.
    Network discovery uses its package metadata. Missing or misleading metadata
    needs investigation. Do not
    invent a version or pass an override to enable execution.
@@ -82,8 +82,8 @@ code first. Preserve the source controller and managed devices untouched.
    --recovery ...`. Confirm isolation and the quiet maintenance window. Stop here
    until explicit destructive-test authorisation has been granted.
 
-Development validation passed 93 synthetic cases: 47 Mongo-program cases, eight
-environment cases, eight version diagnostic cases, five sudo compatibility cases,
+Development validation passed 99 synthetic cases: 47 Mongo-program cases, eight
+environment cases, 14 version diagnostic cases, five sudo compatibility cases,
 eight recovery cases, five journal cases and 12 Bash execution cases. Bash syntax checks, ShellCheck and JavaScript
 syntax checks also passed.
 
