@@ -1,0 +1,9 @@
+# Local operational evidence must remain outside the checkout.
+journal
+recovery.attestation
+*.unf
+*.unifi
+*.archive
+*.dump
+*.log
+__pycache__/
