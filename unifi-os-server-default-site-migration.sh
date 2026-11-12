@@ -214,15 +214,25 @@ find_versions() {
   # shellcheck disable=SC2016
   NETWORK_VERSION=$(in_container dpkg-query -W '-f=${Version}' unifi 2>/dev/null || true)
   VERSIONS_KNOWN=1
-  local version
-  for version in "$OS_VERSION" "$NETWORK_VERSION"; do
-    [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+([+~:._a-zA-Z0-9-]*)?$ ]] || VERSIONS_KNOWN=0
-  done
+  local pattern='^[0-9]+\.[0-9]+\.[0-9]+([+~:._a-zA-Z0-9-]*)?$'
+  if [[ $OS_VERSION =~ $pattern ]]; then
+    ok "UniFi OS Server version (container OCI label): $OS_VERSION"
+  else
+    OS_VERSION=""
+    VERSIONS_KNOWN=0
+    warn "UniFi OS Server version unavailable from container OCI label."
+  fi
+  if [[ $NETWORK_VERSION =~ $pattern ]]; then
+    ok "UniFi Network version (package metadata): $NETWORK_VERSION"
+  else
+    NETWORK_VERSION=""
+    VERSIONS_KNOWN=0
+    warn "UniFi Network version unavailable from package metadata."
+  fi
   if (( VERSIONS_KNOWN )); then
-    ok "Versions: UniFi OS Server $OS_VERSION; UniFi Network $NETWORK_VERSION"
     warn "Versions are informational; schema checks and a restore rehearsal are required."
   else
-    warn "Unknown application version; execution is blocked. Verify image labels and Network package metadata."
+    warn "Unknown application version; execution is blocked. Verify the missing version metadata."
   fi
   local out
   out=$(mongo_js 'var r=db.adminCommand({isMaster:1}); var b=db.adminCommand({buildInfo:1}); if(r.ok===1 && b.ok===1 && /^[0-9.]+$/.test(b.version)) print("UOS CAP mongo="+b.version+" transactions="+((r.setName || r.msg==="isdbgrid") && r.logicalSessionTimeoutMinutes!==undefined ? "possible-unvalidated" : "unavailable"));' 2>/dev/null) || fail "Cannot inspect Mongo capabilities."
