@@ -15,7 +15,7 @@ function matches(doc, query) {
         if (key === '$or') return query[key].some(q => matches(doc, q));
         const value = query[key];
         if (value && typeof value === 'object' && '$exists' in value) return (doc[key] !== undefined) === value.$exists;
-        return same(doc[key], value);
+        return typeof doc[key] === typeof value && same(doc[key], value);
     });
 }
 function fixture() {
@@ -97,6 +97,7 @@ test('unknown Default references', () => rejected(d => { d.unreviewed = [{site_i
 test('partial flag move', () => rejected(d => { delete d.site[0].attr_hidden_id; d.site[1].attr_hidden_id = 'default'; }));
 test('duplicate name', () => rejected(d => { d.site[1].name = 'default'; }));
 test('duplicate Default', () => rejected(d => { d.site[1].attr_hidden_id = 'default'; }));
+test('invalid cleanup record identity rejected before writes', () => rejected(d => { d.networkconf.push({_id: 'wrong-type', site_id: OLD}); }));
 test('missing device collection', () => rejected(d => { delete d.device; }));
 test('completed topology recognised conservatively', () => {
     const d = fixture(); d.site.shift(); Object.assign(d.site[0], {name: 'default', attr_hidden_id: 'default', attr_no_delete: true});

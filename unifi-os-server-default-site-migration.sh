@@ -39,9 +39,13 @@ step() { STEP="$*"; log_event PHASE "started"; }
 
 # Require one persistent private state directory per destination. An existing
 # journal is never overwritten, removed or automatically resumed.
-open_journal() {
+validate_state_directory() {
   [[ $STATE_DIR == /* && -d $STATE_DIR && ! -L $STATE_DIR &&
      $(stat -c %u "$STATE_DIR") == "$(id -u)" && $(stat -c %a "$STATE_DIR") == 700 ]] || fail "State directory must be absolute, private (700), owned by you and not a symlink."
+}
+
+open_journal() {
+  validate_state_directory
   [[ ! -L $STATE_DIR/lock ]] || fail "Unsafe lock path."
   exec {LOCK_FD}>"$STATE_DIR/lock" || fail "Cannot open migration lock."
   flock -n "$LOCK_FD" || fail "Another migration is active."
@@ -337,6 +341,7 @@ main() {
   if [[ $mode == execute ]]; then
     [[ -n $TARGET_ID && -n $STATE_DIR && -n $RECOVERY_FILE ]] || fail "Execution requires site, state directory and recovery attestation."
   fi
+  [[ -z $STATE_DIR ]] || validate_state_directory
   step discovery
   check_basics
   find_service_unit

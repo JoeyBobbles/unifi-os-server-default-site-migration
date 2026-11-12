@@ -19,7 +19,9 @@ service_running() { return 0; }
 sudo() {
   [[ $* == '-n systemctl restart uosserver.service' ]] || exit 99
   echo restart >> "$TRACE"
-  [[ ${FAULT:-} != restart ]]
+  [[ ${FAULT:-} != restart ]] || return 1
+  if [[ ${FAULT:-} == restart-second && $(grep -c restart "$TRACE") == 2 ]]; then return 1; fi
+  return 0
 }
 ask() {
   case "$1" in
@@ -35,6 +37,7 @@ mongo_js() {
   local action
   action=$(printf '%s' "$1" | sed -n "s/.*var action = '\([a-z]*\)';.*/\1/p" | head -n1)
   echo "$action" >> "$TRACE"
+  if [[ $action == flags && ${FAULT:-} == hardkill ]]; then kill -KILL "$RUN_PID"; return 1; fi
   if [[ $action == flags && ${FAULT:-} == signal ]]; then kill -TERM "$RUN_PID"; return 1; fi
   if [[ $action == "${FAULT:-}" ]]; then echo 'UOS FAIL injected'; return 0; fi
   if [[ $action == check ]]; then echo 'UOS PLAN target=222222222222222222222222 old=111111111111111111111111 configuration_records=1'; fi
@@ -111,6 +114,21 @@ class Execution(unittest.TestCase):
     def test_cleanup_failure(self):
         self.assertNotEqual(self.run_script('cleanup').returncode, 0)
         self.assertEqual(self.actions(), ['check', 'check', 'flags', 'restart', 'cleanup'])
+
+    def test_second_restart_failure(self):
+        self.assertNotEqual(self.run_script('restart-second').returncode, 0)
+        self.assertEqual(self.actions(), ['check', 'check', 'flags', 'restart', 'cleanup', 'restart'])
+        self.assertNotIn('phase=complete', (self.state / 'journal').read_text())
+
+    def test_final_verification_failure(self):
+        self.assertNotEqual(self.run_script('verify').returncode, 0)
+        self.assertNotIn('phase=complete', (self.state / 'journal').read_text())
+
+    def test_hard_kill_retains_journal(self):
+        self.assertEqual(self.run_script('hardkill').returncode, -9)
+        self.assertIn('phase=flags', (self.state / 'journal').read_text())
+        self.assertNotEqual(self.run_script().returncode, 0)
+        self.assertNotIn('cleanup', self.actions())
 
     def test_signal_interruption(self):
         self.assertEqual(self.run_script('signal').returncode, 143)
