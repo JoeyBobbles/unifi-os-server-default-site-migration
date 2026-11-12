@@ -131,7 +131,9 @@ exclude application writes between checks. Reference checks cover top-level
 valid installations, including deployments with other history references or retained
 AP/certificate records. The sole retention exception is `admin_activity_log`
 references to this migration's existing Default identity; other orphan references
-remain errors. Investigate schema differences; do not expand deletion
+remain errors. Blocked scheduled tasks produce a limited read-only summary of
+recognised actions, boolean flags and target counts. They remain blocked; the
+summary does not authorise removal or retention. Investigate schema differences; do not expand deletion
 lists or remove guards without review and isolated tests. Read scans may be slow on
 large databases. Mongo transactions are reported but not used; they cannot cover
 the intervening service restart. There is no automatic rollback or resume.

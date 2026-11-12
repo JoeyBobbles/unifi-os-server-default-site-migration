@@ -146,6 +146,35 @@ test('retained history does not exempt AP or certificate configuration', () => r
     d.admin_activity_log = [{site_id: OLD}];
     d.apgroup = [{site_id: OLD}]; d.ssl_inspection_certificate = [{site_id: OLD}];
 }));
+test('scheduled task summary reports metadata and still blocks migration', () => {
+    const d = fixture();
+    d.scheduletask = [{site_id: OLD, action: 'upgrade', enabled: true, attr_hidden: true,
+        attr_no_delete: true, execute_only_once: false, upgrade_targets: [{mac: 'DUMMY_PRIVATE_ADDRESS'}],
+        name: 'DUMMY_PRIVATE_NAME', cron_expr: 'DUMMY_PRIVATE_SCHEDULE', payload: 'DUMMY_PRIVATE_PAYLOAD'}];
+    const before = JSON.stringify(d), result = run(d);
+    assert.match(result.output, /UOS TASK index=1 action=upgrade enabled=true hidden=true no_delete=true execute_once=false upgrade_target_count=1/);
+    assert.match(result.output, /UOS FAIL/);
+    assert.doesNotMatch(result.output, /DUMMY_PRIVATE/);
+    assert.equal(result.writes.length, 0);
+    assert.equal(JSON.stringify(d), before);
+});
+test('unknown task actions and malformed flags are redacted', () => {
+    const d = fixture(); d.scheduletask = [{site_id: OLD, action: 'DUMMY_PRIVATE_ACTION', enabled: 'DUMMY_PRIVATE_FLAG'}];
+    const result = run(d);
+    assert.match(result.output, /action=unrecognised-or-absent enabled=unsupported-type/);
+    assert.doesNotMatch(result.output, /DUMMY_PRIVATE/);
+    assert.match(result.output, /UOS FAIL/);
+});
+test('task diagnostics are bounded and scoped to existing Default', () => {
+    const d = fixture();
+    d.scheduletask = Array.from({length: 12}, () => ({site_id: OLD, action: 'upgrade'}));
+    d.scheduletask.push({site_id: TARGET, action: 'reboot'});
+    const result = run(d);
+    assert.equal((result.output.match(/UOS TASK index=/g) || []).length, 10);
+    assert.match(result.output, /UOS TASK additional_records_omitted=2/);
+    assert.doesNotMatch(result.output, /action=reboot/);
+    assert.equal(result.writes.length, 0);
+});
 test('partial flag move', () => rejected(d => { delete d.site[0].attr_hidden_id; d.site[1].attr_hidden_id = 'default'; }));
 test('duplicate name', () => rejected(d => { d.site[1].name = 'default'; }));
 test('duplicate Default', () => rejected(d => { d.site[1].attr_hidden_id = 'default'; }));

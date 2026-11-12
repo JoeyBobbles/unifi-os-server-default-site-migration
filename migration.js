@@ -18,6 +18,25 @@
     // Upstream intentionally retained activity history when deleting a site.
     // Only references to this migration's old identity receive this exception.
     var retainedHistory = ['admin_activity_log'];
+    function reportScheduledTasks(collection, oldId) {
+        var index = 0;
+        collection.find(ref(oldId)).forEach(function (task) {
+            index += 1;
+            if (index > 10) return;
+            // Only recognised operation names and boolean/count metadata leave
+            // this function. Never log names, cron expressions, MACs or payloads.
+            var knownActions = ['upgrade', 'speedtest', 'backup', 'reboot', 'stream'];
+            var actionLabel = knownActions.indexOf(task.action) >= 0 ? task.action : 'unrecognised-or-absent';
+            function flag(value) {
+                return value === true ? 'true' : value === false ? 'false' : value === undefined ? 'absent' : 'unsupported-type';
+            }
+            var targets = Array.isArray(task.upgrade_targets) ? task.upgrade_targets.length : 'absent-or-unsupported';
+            print('UOS TASK index=' + index + ' action=' + actionLabel + ' enabled=' + flag(task.enabled) +
+                ' hidden=' + flag(task.attr_hidden) + ' no_delete=' + flag(task.attr_no_delete) +
+                ' execute_once=' + flag(task.execute_only_once) + ' upgrade_target_count=' + targets);
+        });
+        if (index > 10) print('UOS TASK additional_records_omitted=' + (index - 10));
+    }
     function inspect(stage) {
         var names = db.getCollectionNames();
         ['site', 'device', 'setting', 'networkconf', 'wlanconf'].forEach(function (name) {
@@ -86,6 +105,7 @@
             } else if (count && cleanup.indexOf(name) < 0) {
                 print('UOS BLOCK collection=' + name + ' old_site_references=' + count);
                 unreviewed.push(name);
+                if (name === 'scheduletask') reportScheduledTasks(collection, oldId);
             }
             if (['setting', 'networkconf', 'wlanconf'].indexOf(name) >= 0) config += collection.count(ref(newId));
         });

@@ -29,7 +29,8 @@ sites, invalid selections, duplicate flags/names, protected system identities,
 string/ObjectId device associations, missing imported configuration, orphan and
 unsupported references, unknown Default references, invalid cleanup identities,
 retained activity history (including completed verification), rejected unrelated
-history orphans, legacy and modern ObjectId conversion, shell startup/retry options,
+history orphans, bounded/redacted scheduled-task diagnostics,
+legacy and modern ObjectId conversion, shell startup/retry options,
 version/capability discovery failures, recovery evidence rejection, exclusive
 locking, partially moved flags, per-write exceptions and unacknowledged writes,
 nonzero Mongo process exits despite a success marker, both restart failures,
@@ -81,7 +82,7 @@ code first. Preserve the source controller and managed devices untouched.
    --recovery ...`. Confirm isolation and the quiet maintenance window. Stop here
    until explicit destructive-test authorisation has been granted.
 
-Development validation passed 90 synthetic cases: 44 Mongo-program cases, eight
+Development validation passed 93 synthetic cases: 47 Mongo-program cases, eight
 environment cases, eight version diagnostic cases, five sudo compatibility cases,
 eight recovery cases, five journal cases and 12 Bash execution cases. Bash syntax checks, ShellCheck and JavaScript
 syntax checks also passed.
