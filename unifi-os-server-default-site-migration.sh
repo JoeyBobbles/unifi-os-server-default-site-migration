@@ -18,21 +18,51 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 # Output and input
 # ----------------------------------------------------------------------------
 
-if [[ -t 1 ]]; then
-  C_RED=$'\033[31m'; C_GRN=$'\033[32m'; C_YEL=$'\033[33m'
-  C_BLD=$'\033[1m'; C_OFF=$'\033[0m'
-else
-  C_RED=""; C_GRN=""; C_YEL=""; C_BLD=""; C_OFF=""
-fi
-
+STEP=start
+JOURNAL=""
+log_event() {
+  local line
+  line="$(date -u +%Y-%m-%dT%H:%M:%SZ) phase=$STEP level=$1 $2"
+  printf '%s\n' "$line"
+  if [[ -n $JOURNAL ]]; then
+    if ! { printf '%s\n' "$line" >> "$JOURNAL" && sync -f "$JOURNAL"; }; then
+      printf 'Cannot persist journal; stop and follow RECOVERY.md.\n' >&2
+      exit 1
+    fi
+  fi
+}
 say()  { printf '%s\n' "$*"; }
-ok()   { printf '%s[ OK ]%s %s\n' "$C_GRN" "$C_OFF" "$*"; }
-warn() { printf '%s[WARN]%s %s\n' "$C_YEL" "$C_OFF" "$*"; }
-fail() { printf '%s[FAIL]%s %s\n' "$C_RED" "$C_OFF" "$*"; exit 1; }
-step() { STEP="$*"; printf '\n%s== %s ==%s\n' "$C_BLD" "$*" "$C_OFF"; }
+ok()   { log_event OK "$*"; }
+warn() { log_event WARN "$*"; }
+fail() { log_event FAIL "$*"; exit 1; }
+step() { STEP="$*"; log_event PHASE "started"; }
 
-# The script itself arrives on stdin (the pasted block), so every answer is
-# read from the keyboard (/dev/tty), never from stdin.
+# Require one persistent private state directory per destination. An existing
+# journal is never overwritten, removed or automatically resumed.
+open_journal() {
+  [[ $STATE_DIR == /* && -d $STATE_DIR && ! -L $STATE_DIR &&
+     $(stat -c %u "$STATE_DIR") == "$(id -u)" && $(stat -c %a "$STATE_DIR") == 700 ]] || fail "State directory must be absolute, private (700), owned by you and not a symlink."
+  [[ ! -L $STATE_DIR/lock ]] || fail "Unsafe lock path."
+  exec {LOCK_FD}>"$STATE_DIR/lock" || fail "Cannot open migration lock."
+  flock -n "$LOCK_FD" || fail "Another migration is active."
+  [[ ! -e $STATE_DIR/journal && ! -L $STATE_DIR/journal ]] || fail "Existing migration journal: investigate completion or recovery; never blindly rerun."
+  (umask 077; set -C; : > "$STATE_DIR/journal") || fail "Cannot create a new journal."
+  JOURNAL="$STATE_DIR/journal"
+  log_event CONTEXT "target=$TARGET_ID old=$OLD_ID database=$MONGO_DB"
+}
+
+on_exit() {
+  local status=$?
+  if [[ -n $JOURNAL && $status != 0 ]]; then
+    log_event STOP "status=$status outcome=uncertain follow=RECOVERY.md"
+  fi
+}
+trap on_exit EXIT
+trap 'warn "Interrupted; database outcome may be uncertain. Follow RECOVERY.md."; exit 130' INT
+trap 'warn "Terminated; database outcome may be uncertain. Follow RECOVERY.md."; exit 143' TERM
+trap 'warn "Session lost; database outcome may be uncertain. Follow RECOVERY.md."; exit 129' HUP
+
+# Confirmations always come from the controlling terminal, never piped stdin.
 ask() {
   local answer=""
   printf '%s' "$1" >/dev/tty
@@ -53,9 +83,6 @@ ask_yn() {
 
 # Counts non-empty lines.
 count_lines() { printf '%s' "$1" | grep -c . || true; }
-
-STEP="start"
-trap 'printf "\n"; warn "Stopped by user during: $STEP"; exit 130' INT
 
 # ----------------------------------------------------------------------------
 # Container and Mongo access
