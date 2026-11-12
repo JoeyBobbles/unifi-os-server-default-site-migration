@@ -6,9 +6,13 @@ const program = fs.readFileSync('migration.js', 'utf8');
 const OLD = '111111111111111111111111';
 const TARGET = '222222222222222222222222';
 const SYSTEM = '333333333333333333333333';
-function ObjectId(id) { return {toHexString: () => id}; }
+function ObjectId(id) {
+    if (!(this instanceof ObjectId)) return new ObjectId(id);
+    this.toHexString = () => id;
+}
 function same(a, b) {
-    return (a && a.toHexString ? a.toHexString() : a) === (b && b.toHexString ? b.toHexString() : b);
+    const value = v => v instanceof ObjectId ? (v.toHexString ? v.toHexString() : v.str) : v;
+    return value(a) === value(b);
 }
 function matches(doc, query) {
     return Object.keys(query).every(key => {
@@ -80,6 +84,12 @@ test('valid preflight is read only', () => {
     assert.equal(JSON.stringify(data), before);
     assert.equal(result.writes.length, 0);
 });
+test('legacy ObjectId str representation', () => {
+    const d = fixture();
+    d.site.forEach(s => { s._id.str = s._id.toHexString(); delete s._id.toHexString; });
+    assert.match(run(d).output, /UOS READY/);
+});
+test('plain object masquerading as ObjectId rejected', () => rejected(d => { d.site[1]._id = {str: TARGET}; }));
 test('unique candidate inferred', () => assert.match(run(fixture(), '').output, /UOS READY/));
 test('missing Default', () => rejected(d => { d.site.shift(); }));
 test('missing imported site', () => rejected(d => { d.site.splice(1, 1); }));

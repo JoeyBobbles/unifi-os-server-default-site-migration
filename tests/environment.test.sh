@@ -36,4 +36,14 @@ find_versions
 [[ $VERSIONS_KNOWN == 0 ]]
 mongo_js() { echo 'incompatible'; }
 if (find_versions); then exit 1; fi
-printf '6 environment tests passed\n'
+# Restore the real argument builder after the discovery mocks above.
+source ./unifi-os-server-default-site-migration.sh
+# Only inspect constructed argv; no shell client is launched.
+in_container() { printf '%s\n' "$*"; }
+MONGO_CLIENT=/usr/bin/mongosh MONGO_PORT=27117 MONGO_DB=ace
+args=$(mongo_js 'synthetic-read')
+[[ $args == *'--retryWrites=false'* && $args == *'--norc'* ]]
+MONGO_CLIENT=/usr/bin/mongo
+args=$(mongo_js 'synthetic-read')
+[[ $args != *'--retryWrites'* && $args == *'--norc'* ]]
+printf '8 environment tests passed\n'

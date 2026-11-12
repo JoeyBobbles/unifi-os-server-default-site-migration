@@ -102,7 +102,9 @@ as_svc() {
 in_container() { as_svc exec "$CONTAINER" "$@"; }
 
 mongo_js() {
-  in_container "$MONGO_CLIENT" --norc --quiet --host localhost --port "$MONGO_PORT" "$MONGO_DB" --eval "$1"
+  local retry_args=()
+  [[ $MONGO_CLIENT != */mongosh ]] || retry_args=(--retryWrites=false)
+  in_container "$MONGO_CLIENT" "${retry_args[@]}" --norc --quiet --host localhost --port "$MONGO_PORT" "$MONGO_DB" --eval "$1"
 }
 
 # ----------------------------------------------------------------------------
@@ -165,8 +167,8 @@ find_container() {
 find_mongo() {
   local found props value
   found=$(in_container which mongosh mongo 2>/dev/null || true)
-  MONGO_CLIENT=$(printf '%s\n' "$found" | grep '/mongo$' | head -n1 || true)
-  [[ -n $MONGO_CLIENT ]] || MONGO_CLIENT=$(printf '%s\n' "$found" | grep '/mongosh$' | head -n1 || true)
+  MONGO_CLIENT=$(printf '%s\n' "$found" | grep '/mongosh$' | head -n1 || true)
+  [[ -n $MONGO_CLIENT ]] || MONGO_CLIENT=$(printf '%s\n' "$found" | grep '/mongo$' | head -n1 || true)
   [[ -n $MONGO_CLIENT ]] || fail "No mongo or mongosh client found inside $CONTAINER."
 
   # The UniFi Network app's own settings name its database and port.

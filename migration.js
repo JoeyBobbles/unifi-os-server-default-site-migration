@@ -5,8 +5,10 @@
 (function () {
     function reject(reason) { throw new Error(reason); }
     function hex(value) {
-        if (!value || typeof value.toHexString !== 'function') reject('Non-ObjectId identity');
-        var result = value.toHexString();
+        if (!value || !(value instanceof ObjectId)) reject('Non-ObjectId identity');
+        // Legacy mongo exposes .str; mongosh uses the BSON conversion method.
+        // https://www.mongodb.com/docs/mongodb-shell/reference/compatibility/
+        var result = typeof value.toHexString === 'function' ? value.toHexString() : value.str;
         if (!/^[0-9a-f]{24}$/.test(result)) reject('Invalid identity');
         return result;
     }
