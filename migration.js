@@ -14,7 +14,7 @@
     }
     function ref(id) { return {$or: [{site_id: id}, {site_id: ObjectId(id)}]}; }
     var cleanup = ['setting', 'networkconf', 'wlanconf', 'wlangroup',
-        'usergroup', 'radiusprofile', 'dpigroup', 'privilege'];
+        'usergroup', 'radiusprofile', 'dpigroup', 'privilege', 'scheduletask'];
     // Upstream intentionally retained activity history when deleting a site.
     // Only references to this migration's old identity receive this exception.
     var retainedHistory = ['admin_activity_log', 'alert', 'time_machine_infrastructure_snapshot'];
@@ -22,6 +22,19 @@
     // observed UI deletion policy. Keep their documents and original site IDs.
     var retainedConfiguration = ['apgroup', 'ssl_inspection_certificate'];
     var retainedRecords = retainedHistory.concat(retainedConfiguration);
+    function validateScanSchedule(task) {
+        var fields = ['_id', 'site_id', 'action', 'cron_expr', 'execute_only_once', 'name', 'timezone'];
+        if (Object.keys(task).length !== fields.length || fields.some(function (field) {
+            return !Object.prototype.hasOwnProperty.call(task, field);
+        })) reject('Unsupported Default scheduled task');
+        hex(task._id);
+        if (task.action !== 'quick-scan' || task.execute_only_once !== false ||
+            typeof task.name !== 'string' || typeof task.cron_expr !== 'string' ||
+            !task.cron_expr.length || task.cron_expr.length > 256 ||
+            typeof task.timezone !== 'string' || !task.timezone.length || task.timezone.length > 128) {
+            reject('Unsupported Default scheduled task');
+        }
+    }
     function reportScheduledTasks(collection, oldId) {
         var index = 0;
         collection.find(ref(oldId)).forEach(function (task) {
@@ -29,7 +42,7 @@
             if (index > 10) return;
             // Only recognised operation names and boolean/count metadata leave
             // this function. Never log names, cron expressions, MACs or payloads.
-            var knownActions = ['upgrade', 'speedtest', 'backup', 'reboot', 'stream'];
+            var knownActions = ['quick-scan', 'upgrade', 'speedtest', 'backup', 'reboot', 'stream'];
             var actionLabel = knownActions.indexOf(task.action) >= 0 ? task.action : 'unrecognised-or-absent';
             function flag(value) {
                 return value === true ? 'true' : value === false ? 'false' : value === undefined ? 'absent' : 'unsupported-type';
@@ -94,23 +107,30 @@
             // to leave orphaned. No broad cleanup or inferred deletion is allowed.
             var collection = db.getCollection(name);
             if (typeof collection.deleteOne !== 'function' || typeof db.site.updateOne !== 'function') reject('Unsupported write API');
+            if (name === 'scheduletask' && collection.count(ref(oldId))) reportScheduledTasks(collection, oldId);
             collection.find({site_id: {$exists: true}}).forEach(function (record) {
                 var value = record.site_id, id;
                 if (typeof value === 'string' && /^[0-9a-f]{24}$/.test(value)) id = value;
                 else id = hex(value);
                 if (id === oldId && cleanup.indexOf(name) >= 0) hex(record._id);
+                if (id === oldId && name === 'scheduletask') validateScanSchedule(record);
                 if (id === oldId && retainedRecords.indexOf(name) >= 0) return;
                 if (!sites.some(function (s) { return hex(s._id) === id; })) reject('Orphan site reference in ' + name);
             });
             var count = collection.count(ref(oldId));
-            if (name === 'device' && count !== 0) reject('Existing Default has device associations');
+            if (name === 'device') {
+                if (count !== 0) reject('Existing Default has device associations');
+                if (stage === 'initial') print('UOS CHECK existing_default_device_associations=0');
+            }
             if (count && retainedRecords.indexOf(name) >= 0) {
                 var category = retainedHistory.indexOf(name) >= 0 ? 'history' : 'residual_configuration';
                 print('UOS RETAIN ' + category + '=' + name + ' old_site_references=' + count + ' unchanged');
             } else if (count && cleanup.indexOf(name) < 0) {
                 print('UOS BLOCK collection=' + name + ' old_site_references=' + count);
                 unreviewed.push(name);
-                if (name === 'scheduletask') reportScheduledTasks(collection, oldId);
+            }
+            if (stage === 'initial' && count && cleanup.indexOf(name) >= 0) {
+                print('UOS PLAN cleanup_collection=' + name + ' records=' + count);
             }
             if (['setting', 'networkconf', 'wlanconf'].indexOf(name) >= 0) config += collection.count(ref(newId));
         });
@@ -155,7 +175,10 @@
                 records.forEach(function (record) {
                     inspect('flags');
                     hex(record._id);
-                    deleted(collection.deleteOne({_id: record._id, site_id: record.site_id}, options));
+                    // Match every observed task field, including its action and
+                    // schedule, so a concurrently changed task is not deleted.
+                    var filter = name === 'scheduletask' ? record : {_id: record._id, site_id: record.site_id};
+                    deleted(collection.deleteOne(filter, options));
                 });
                 if (collection.count(ref(oldIdentity)) !== 0) reject('Unexpected phase state');
                 print('UOS WRITE collection=' + name + ' deleted=' + records.length);
@@ -177,7 +200,7 @@
             'Expected exactly one current Default', 'Partial migration or unsupported Default flags',
             'No imported candidate; already Default or import missing', 'Unexpected additional sites',
             'Selected imported site not found or protected', 'Partial migration or unsupported imported flags',
-            'Unsupported write API', 'Unexpected phase state', 'Write acknowledgement mismatch', 'Existing Default has device associations', 'Imported site has no configuration records', 'Unsupported action'];
+            'Unsupported Default scheduled task', 'Unsupported write API', 'Unexpected phase state', 'Write acknowledgement mismatch', 'Existing Default has device associations', 'Imported site has no configuration records', 'Unsupported action'];
         var message = String(error.message);
         if (safe.indexOf(message) < 0 && !/^(Missing required collection|Orphan site reference in|Unreviewed Default references in):? [a-zA-Z0-9_.-]+$/.test(message)) message = 'Database operation or schema validation failed';
         print('UOS FAIL ' + message);

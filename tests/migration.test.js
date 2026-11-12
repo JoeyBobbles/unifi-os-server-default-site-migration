@@ -33,18 +33,19 @@ function fixture() {
         networkconf: [], wlanconf: []
     };
 }
-function run(data, target = TARGET, action = 'check', failAt = 0, response = 'throw') {
+function run(data, target = TARGET, action = 'check', failAt = 0, response = 'throw', beforeWrite = () => {}) {
     const output = [], writes = [];
     const db = {getCollectionNames: () => Object.keys(data)};
     db.getCollection = name => ({
         find: (q = {}) => {
-            const rows = (data[name] || []).filter(d => matches(d, q));
+            const rows = (data[name] || []).filter(d => matches(d, q)).map(d => ({...d}));
             return {toArray: () => rows, forEach: fn => rows.forEach(fn)};
         },
         count: q => (data[name] || []).filter(d => matches(d, q)).length,
         updateOne: (q, update, options) => {
             assert.equal(options.writeConcern.j, true);
             writes.push(name);
+            beforeWrite({collection: name, data, query: q});
             if (writes.length === failAt && response === 'throw') throw Error('private-driver-error');
             const doc = (data[name] || []).find(d => matches(d, q));
             if (doc) {
@@ -57,6 +58,7 @@ function run(data, target = TARGET, action = 'check', failAt = 0, response = 'th
         deleteOne: (q, options) => {
             assert.equal(options.writeConcern.j, true);
             writes.push(name);
+            beforeWrite({collection: name, data, query: q});
             if (writes.length === failAt && response === 'throw') throw Error('private-driver-error');
             const index = (data[name] || []).findIndex(d => matches(d, q));
             if (index >= 0) data[name].splice(index, 1);
@@ -190,6 +192,65 @@ test('task diagnostics are bounded and scoped to existing Default', () => {
     assert.match(result.output, /UOS TASK additional_records_omitted=2/);
     assert.doesNotMatch(result.output, /action=reboot/);
     assert.equal(result.writes.length, 0);
+});
+function scanSchedule(site = OLD) {
+    return {_id: ObjectId(site === OLD ? 'aaaaaaaaaaaaaaaaaaaaaaab' : 'aaaaaaaaaaaaaaaaaaaaaaac'),
+        site_id: site, action: 'quick-scan', cron_expr: '0 0 3 * * ?', execute_only_once: false,
+        name: 'Synthetic scan schedule', timezone: 'UTC'};
+}
+test('supported Default scan schedule produces a read-only cleanup plan', () => {
+    const d = fixture(); d.scheduletask = [scanSchedule()];
+    const before = JSON.stringify(d), result = run(d);
+    assert.match(result.output, /UOS READY/);
+    assert.match(result.output, /UOS PLAN cleanup_collection=scheduletask records=1/);
+    assert.match(result.output, /UOS CHECK existing_default_device_associations=0/);
+    assert.equal(result.writes.length, 0);
+    assert.equal(JSON.stringify(d), before);
+});
+test('promotion removes only the scoped scan schedule and retains imported/global tasks', () => {
+    const d = fixture();
+    d.scheduletask = [scanSchedule(), scanSchedule(TARGET), {_id: ObjectId('aaaaaaaaaaaaaaaaaaaaaaad'), action: 'synthetic-global'}];
+    const keep = JSON.stringify(d.scheduletask.slice(1));
+    assert.match(run(d, TARGET, 'flags').output, /UOS READY/);
+    const result = run(d, TARGET, 'cleanup');
+    assert.match(result.output, /UOS READY/);
+    assert.equal(result.writes.filter(name => name === 'scheduletask').length, 1);
+    assert.equal(JSON.stringify(d.scheduletask), keep);
+    assert.match(run(d, TARGET, 'verify').output, /UOS READY/);
+});
+for (const [label, change] of [
+    ['unknown action', task => { task.action = 'upgrade'; }],
+    ['extra device targets', task => { task.upgrade_targets = []; }],
+    ['one-off task', task => { task.execute_only_once = true; }],
+    ['missing timezone', task => { delete task.timezone; }],
+    ['invalid schedule type', task => { task.cron_expr = {}; }],
+    ['string identity', task => { task._id = 'aaaaaaaaaaaaaaaaaaaaaaab'; }],
+    ['extra enabled flag', task => { task.enabled = true; }]
+]) {
+    test('unsupported Default scan schedule rejected: ' + label, () => rejected(d => {
+        const task = scanSchedule(); change(task); d.scheduletask = [task];
+    }));
+}
+for (const response of ['throw', 'unacknowledged']) {
+    test('scan schedule deletion failure stops cleanup: ' + response, () => {
+        const d = fixture(); d.scheduletask = [scanSchedule()];
+        assert.match(run(d, TARGET, 'flags').output, /UOS READY/);
+        const result = run(d, TARGET, 'cleanup', 1, response);
+        assert.match(result.output, /UOS FAIL/);
+        assert.equal(result.writes.length, 1);
+        assert.equal(d.site.some(s => same(s._id, OLD)), true);
+    });
+}
+test('concurrent schedule change prevents snapshot deletion', () => {
+    const d = fixture(); d.scheduletask = [scanSchedule()];
+    assert.match(run(d, TARGET, 'flags').output, /UOS READY/);
+    const result = run(d, TARGET, 'cleanup', 0, 'throw', event => {
+        if (event.collection === 'scheduletask') d.scheduletask[0].cron_expr = 'changed-synthetic-schedule';
+    });
+    assert.match(result.output, /UOS FAIL/);
+    assert.equal(d.scheduletask.length, 1);
+    assert.equal(result.writes.length, 1);
+    assert.equal(d.site.some(s => same(s._id, OLD)), true);
 });
 test('partial flag move', () => rejected(d => { delete d.site[0].attr_hidden_id; d.site[1].attr_hidden_id = 'default'; }));
 test('duplicate name', () => rejected(d => { d.site[1].name = 'default'; }));

@@ -29,7 +29,9 @@ sites, invalid selections, duplicate flags/names, protected system identities,
 string/ObjectId device associations, missing imported configuration, orphan and
 unsupported references, unknown Default references, invalid cleanup identities,
 upstream retained history/AP-group/certificate records (including completed verification), rejected unrelated
-history orphans, bounded/redacted scheduled-task diagnostics,
+history orphans, bounded/redacted scheduled-task diagnostics, strict scan-task
+schema checks, scoped task cleanup, changed-task deletion refusal and task write
+failures,
 legacy and modern ObjectId conversion, shell startup/retry options,
 version/capability discovery failures, recovery evidence rejection, exclusive
 locking, partially moved flags, per-write exceptions and unacknowledged writes,
@@ -82,7 +84,7 @@ code first. Preserve the source controller and managed devices untouched.
    --recovery ...`. Confirm isolation and the quiet maintenance window. Stop here
    until explicit destructive-test authorisation has been granted.
 
-Development validation passed 106 synthetic cases: 54 Mongo-program cases, eight
+Development validation passed 118 synthetic cases: 66 Mongo-program cases, eight
 environment cases, 14 version diagnostic cases, five sudo compatibility cases,
 eight recovery cases, five journal cases and 12 Bash execution cases. Bash syntax checks, ShellCheck and JavaScript
 syntax checks also passed.
@@ -121,7 +123,7 @@ No unattended confirmation flags or production connection steps are provided.
 
 | Scenario | Controlled action | Required evidence and result |
 | --- | --- | --- |
-| Successful promotion | Run once from the verified isolated baseline. | Journal reaches complete; old site/configuration references absent; retained activity history unchanged; target keeps its ObjectId and configuration; one user site named/flagged Default; system/global/unrelated records unchanged; both restarts healthy; UI configuration comparison passes. |
+| Successful promotion | Run once from the verified isolated baseline. | Journal reaches complete; old site/configuration references absent; retained history/AP-group/certificate records unchanged; only supported Default scan schedules removed; imported/global tasks unchanged; target keeps its ObjectId and configuration; one user site named/flagged Default; system/global/unrelated records unchanged; both restarts healthy; UI configuration comparison passes. |
 | Database write failure | In an approved lab-only instrumented copy, inject failure before each flag write and each cleanup operation; repeat with a response lost after a committed write. Never add fault injection switches to the operational script. | First uncertain/failed operation stops subsequent work; no success status; preserve phase/outcome evidence and database state. Test invalid/missing acknowledgement formats too. |
 | Service restart failure | In the lab wrapper, make the first restart fail, then in a fresh run make the second fail. Separately simulate a service that starts but whose database never answers. | Nonzero result; cleanup never follows a failed first restart; second failure never reports complete. Real timeout path is bounded at 600 seconds after systemctl returns. |
 | Interrupted migration | Terminate the lab process after old flags are removed, during cleanup, and after final writes but before final acknowledgement; cover TERM and forced termination. | Durable journal remains; no automatic rollback or resume; exact database state inspected privately. An already running command might finish despite interruption. |

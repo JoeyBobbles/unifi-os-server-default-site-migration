@@ -119,8 +119,9 @@ so the actual Mongo program can be tested independently. Execution:
 3. Restarts UniFi OS Server and checks service state and Mongo availability.
 4. Deletes only snapshot-identified existing Default records in `setting`,
    `networkconf`, `wlanconf`, `wlangroup`, `usergroup`, `radiusprofile`, `dpigroup`
-   and `privilege`. Each deletion is scoped to its identity and site reference,
-   checked individually and preceded by validation. Unknown references are refused; recognised activity history is retained.
+   and `privilege`, plus validated Default-site `quick-scan` schedules. Each deletion is scoped to its identity and site reference,
+   checked individually and preceded by validation. Unknown references are refused;
+   the explicit upstream history and residual-record retention policy is preserved.
 5. Deletes the old site, renames the imported site's internal name to `default`,
    restarts again and verifies the final topology.
 
@@ -135,12 +136,23 @@ exclude application writes between checks. Reference checks cover top-level
 valid installations with other history references or schema differences. Retention exceptions apply only to the five explicitly listed
 collections referencing this migration's existing Default identity; other orphan
 references remain errors. These exceptions restore the upstream retention policy,
-not a claim of vendor-supported compatibility. Blocked scheduled tasks produce a
-limited read-only summary of recognised actions, boolean flags and target counts. They remain blocked; the
-summary does not authorise removal or retention. Investigate schema differences; do not expand deletion
-lists or remove guards without review and isolated tests. Read scans may be slow on
-large databases. Mongo transactions are reported but not used; they cannot cover
-the intervening service restart. There is no automatic rollback or resume.
+not a claim of vendor-supported compatibility.
+
+A Default-site `quick-scan` schedule can be removed only when its document has
+exactly `_id`, `site_id`, `action`, `cron_expr`, `execute_only_once`, `name` and
+`timezone`; its identity must be an ObjectId, action `quick-scan`, execution flag
+`false`, and the name/schedule/timezone must have the expected string types. The
+schedule and timezone must be nonempty. Unknown actions, extra fields, device
+targets or other shapes block execution before any write. Deletion matches every
+observed task field; imported and global tasks are preserved. No scan is triggered.
+This additional cleanup path requires isolated integration and recovery testing;
+synthetic tests alone cannot establish application compatibility.
+
+Task diagnostics show only recognised actions, boolean flags and target counts.
+Investigate schema differences; do not expand deletion lists or remove guards
+without review and isolated tests. Read scans may be slow on large databases.
+Mongo transactions are reported but not used; they cannot cover the intervening
+service restart. There is no automatic rollback or resume.
 
 Mongo shell startup files are disabled, and mongosh automatic write retries are
 disabled. Legacy ObjectId representations are validated explicitly.
