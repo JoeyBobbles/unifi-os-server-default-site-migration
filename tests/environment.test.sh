@@ -6,6 +6,8 @@ ok() { :; }
 warn() { :; }
 # All system and container interactions below are replaced with synthetic replies.
 TARGET_ID=222222222222222222222222
+# This test exercises discovery only; sudo execution is tested separately.
+# shellcheck disable=SC2032
 systemctl() {
   case "$*" in
     list-unit-files*) printf '%s\n' "${UNITS:-uosserver.service enabled}" ;;

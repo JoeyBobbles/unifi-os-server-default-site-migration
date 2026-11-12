@@ -92,7 +92,7 @@ count_lines() { printf '%s' "$1" | grep -c . || true; }
 # that account cannot read ("cannot chdir ... Permission denied"), so always
 # run from /tmp.
 as_svc() {
-  (cd /tmp && sudo -n -H -u "$SVC_USER" XDG_RUNTIME_DIR="/run/user/$SVC_UID" podman --remote=false "$@" </dev/null)
+  (cd /tmp && sudo -n -N -H -u "$SVC_USER" XDG_RUNTIME_DIR="/run/user/$SVC_UID" podman --remote=false "$@" </dev/null)
 }
 
 in_container() { as_svc exec "$CONTAINER" "$@"; }
@@ -108,11 +108,13 @@ mongo_js() {
 check_basics() {
   [[ $(uname -s) == Linux ]] || fail "Linux is required."
   case $(uname -m) in x86_64|aarch64) ;; *) fail "Unsupported architecture." ;; esac
+  (( BASH_VERSINFO[0] >= 5 )) || fail "Bash 5 or newer is required."
+  [[ -r $SCRIPT_DIR/migration.js && -r $SCRIPT_DIR/RECOVERY.md ]] || fail "Keep the reviewed script, migration.js and RECOVERY.md together."
   local cmd
-  for cmd in sudo systemctl id awk grep stat sed tail head uname cat dirname podman; do
+  for cmd in sudo systemctl id awk grep stat sed tail head uname cat dirname podman date sha256sum sync flock; do
     command -v "$cmd" >/dev/null 2>&1 || fail "Required command not found: $cmd"
   done
-  sudo -n true </dev/null || fail "Authenticate with sudo -v before running this script."
+  sudo -n -N true </dev/null || fail "Authenticate with sudo -v before running this script."
   ok "sudo access confirmed."
 }
 
@@ -212,12 +214,62 @@ find_versions() {
 # ----------------------------------------------------------------------------
 # Read-only validation. The Mongo program prints only identifiers and counters.
 # ----------------------------------------------------------------------------
-validate_sites() {
-  local out
-  out=$(mongo_js "var target = '$TARGET_ID'; var action = 'check';
-$(cat "$SCRIPT_DIR/migration.js")" 2>/dev/null) || fail "Database validation failed; no changes made."
-  printf '%s\n' "$out" | grep '^UOS ' || true
-  [[ $(printf '%s\n' "$out" | grep -c '^UOS READY$') == 1 ]] || fail "Preflight rejected the database state."
+database_phase() {
+  local action="$1" out program line status=0
+  program=$(cat "$SCRIPT_DIR/migration.js") || fail "Cannot read migration.js."
+  out=$(mongo_js "var target = '$TARGET_ID'; var oldIdentity = '${OLD_ID:-}'; var action = '$action';
+$program" 2>/dev/null) || status=$?
+  while IFS= read -r line; do
+    [[ $line == 'UOS '* ]] && log_event DB "$line"
+  done <<< "$out"
+  (( status == 0 )) || fail "Mongo process failed; outcome may be uncertain. Follow RECOVERY.md."
+  [[ $(printf '%s\n' "$out" | grep -c '^UOS READY$') == 1 && $out != *'UOS FAIL '* ]] || fail "Database phase rejected; investigate before proceeding."
+  if [[ $action == check ]]; then
+    local pattern='UOS PLAN target=([0-9a-f]{24}) old=([0-9a-f]{24}) '
+    [[ $out =~ $pattern ]] || fail "Missing validated migration identities."
+    TARGET_ID="${BASH_REMATCH[1]}"; OLD_ID="${BASH_REMATCH[2]}"
+  fi
+}
+
+restart_service() {
+  step restart
+  warn "Restarting all applications in UniFi OS Server."
+  sudo -n systemctl restart "$UNIT" </dev/null >/dev/null 2>&1 || fail "Service restart failed. Follow RECOVERY.md."
+  local start=$SECONDS out
+  while (( SECONDS - start < 600 )); do
+    if service_running; then
+      out=$(mongo_js 'if(db.runCommand({ping:1}).ok===1) print("UOS PING");' 2>/dev/null) || out=""
+      if [[ $out == *'UOS PING'* ]]; then ok "Service active and Mongo responds."; return 0; fi
+    fi
+    sleep 2
+  done
+  fail "Service/database restart timed out. Follow RECOVERY.md."
+}
+
+execute_migration() {
+  (( VERSIONS_KNOWN )) || fail "Unknown versions block execution."
+  recovery_prerequisites
+  ask "Type the selected imported site ObjectId ($TARGET_ID): "
+  [[ $ANSWER == "$TARGET_ID" ]] || fail "Site confirmation did not match."
+  ask "Type DELETE EMPTY DEFAULT to authorise irreversible deletion and both restarts: "
+  [[ $ANSWER == 'DELETE EMPTY DEFAULT' ]] || fail "Destructive confirmation did not match."
+  ask "Type RESTORE VERIFIED to attest the checkpoint was restored and destination remains isolated and unchanged: "
+  [[ $ANSWER == 'RESTORE VERIFIED' ]] || fail "Recovery confirmation did not match."
+  open_journal
+  step revalidate
+  database_phase check
+  # No writes have occurred yet; recheck checkpoint age after operator prompts.
+  recovery_prerequisites
+  step flags
+  database_phase flags
+  restart_service
+  step cleanup
+  database_phase cleanup
+  restart_service
+  step verify
+  database_phase verify
+  step complete
+  ok "Migration complete; verify imported configuration in the UI before ending isolation."
 }
 
 # Read attestation as data, never source it or evaluate its values.
@@ -255,30 +307,65 @@ recovery_prerequisites() {
 }
 
 usage() {
-  say "Usage: bash $0 --check [--site OBJECT_ID]"
+  say "Usage: bash $0 --check [--site OBJECT_ID] [--state-dir DIRECTORY] [--recovery FILE]"
+  say "       bash $0 --execute --site OBJECT_ID --state-dir DIRECTORY --recovery FILE"
 }
 
 main() {
-  TARGET_ID=""
+  TARGET_ID=""; OLD_ID=""; STATE_DIR=""; RECOVERY_FILE=""
+  local mode=check mode_set=0 selected=""
+  local site_set=0 state_set=0 recovery_set=0
   while (( $# )); do
     case "$1" in
-      --check) shift ;;
-      --site) (( $# >= 2 )) || fail "--site requires an ObjectId."; TARGET_ID="$2"; shift 2 ;;
+      --check|--execute)
+        (( mode_set == 0 )) || fail "Specify one mode only."
+        mode="${1#--}"; mode_set=1; shift ;;
+      --site|--state-dir|--recovery)
+        (( $# >= 2 )) && [[ -n $2 && $2 != --* ]] || fail "Option requires a value."
+        case "$1" in
+          --site) (( site_set == 0 )) || fail "Duplicate site selection."; site_set=1; TARGET_ID="$2" ;;
+          --state-dir) (( state_set == 0 )) || fail "Duplicate state directory."; state_set=1; STATE_DIR="$2" ;;
+          --recovery) (( recovery_set == 0 )) || fail "Duplicate recovery attestation."; recovery_set=1; RECOVERY_FILE="$2" ;;
+        esac
+        shift 2 ;;
       --help|-h) usage; return 0 ;;
       *) usage; fail "Unknown option." ;;
     esac
   done
   [[ -z $TARGET_ID || $TARGET_ID =~ ^[0-9a-f]{24}$ ]] || fail "Select a lowercase 24-digit hexadecimal ObjectId."
-  step "Discovery (read only)"
+  selected="$TARGET_ID"
+  if [[ $mode == execute ]]; then
+    [[ -n $TARGET_ID && -n $STATE_DIR && -n $RECOVERY_FILE ]] || fail "Execution requires site, state directory and recovery attestation."
+  fi
+  step discovery
   check_basics
   find_service_unit
   find_service_user
   find_container
   find_mongo
   find_versions
-  step "Preflight (read only)"
-  validate_sites
-  ok "Preflight passed. No database writes or service restarts performed."
+  if [[ -n $STATE_DIR && ( -e $STATE_DIR/journal || -L $STATE_DIR/journal ) ]]; then
+    [[ $mode == check && -f $STATE_DIR/journal && ! -L $STATE_DIR/journal ]] || fail "Existing migration journal; execution blocked."
+    local context pattern='target=([0-9a-f]{24}) old=([0-9a-f]{24}) database=([A-Za-z0-9_-]+)$'
+    context=$(head -n1 "$STATE_DIR/journal")
+    [[ $context =~ $pattern ]] || fail "Invalid journal context."
+    TARGET_ID="${BASH_REMATCH[1]}"; OLD_ID="${BASH_REMATCH[2]}"
+    [[ ${BASH_REMATCH[3]} == "$MONGO_DB" && ( -z $selected || $selected == "$TARGET_ID" ) ]] || fail "Journal does not match selected migration."
+    grep -q 'phase=complete level=OK Migration complete;' "$STATE_DIR/journal" || fail "Interrupted/failed migration journal; follow RECOVERY.md."
+    step verify
+    database_phase verify
+    ok "Previously completed migration verified; no changes performed."
+    return 0
+  fi
+  step preflight
+  database_phase check
+  if [[ $mode == check ]]; then
+    if [[ -n $RECOVERY_FILE ]]; then recovery_prerequisites; else warn "Execution prerequisite missing: restore-tested recovery attestation (RECOVERY.md)."; fi
+    [[ -n $STATE_DIR ]] || warn "Execution prerequisite missing: persistent private state directory."
+    ok "Read-only preflight passed; no database writes, journals or service restarts performed."
+    return 0
+  fi
+  execute_migration
 }
 
 if [[ ${BASH_SOURCE[0]} == "$0" ]]; then

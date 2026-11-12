@@ -29,7 +29,7 @@ function fixture() {
         networkconf: [], wlanconf: []
     };
 }
-function run(data, target = TARGET, action = 'check') {
+function run(data, target = TARGET, action = 'check', failAt = 0, response = 'throw') {
     const output = [], writes = [];
     const db = {getCollectionNames: () => Object.keys(data)};
     db.getCollection = name => ({
@@ -38,12 +38,31 @@ function run(data, target = TARGET, action = 'check') {
             return {toArray: () => rows, forEach: fn => rows.forEach(fn)};
         },
         count: q => (data[name] || []).filter(d => matches(d, q)).length,
-        updateOne: () => { writes.push(name); throw Error('Unexpected write'); },
-        deleteMany: () => { writes.push(name); throw Error('Unexpected write'); },
-        deleteOne: () => { writes.push(name); throw Error('Unexpected write'); }
+        updateOne: (q, update, options) => {
+            assert.equal(options.writeConcern.j, true);
+            writes.push(name);
+            if (writes.length === failAt && response === 'throw') throw Error('private-driver-error');
+            const doc = (data[name] || []).find(d => matches(d, q));
+            if (doc) {
+                Object.assign(doc, update.$set || {});
+                Object.keys(update.$unset || {}).forEach(key => { delete doc[key]; });
+            }
+            if (writes.length === failAt) return {acknowledged: false, matchedCount: 1, modifiedCount: 1};
+            return {acknowledged: true, matchedCount: doc ? 1 : 0, modifiedCount: doc ? 1 : 0};
+        },
+        deleteOne: (q, options) => {
+            assert.equal(options.writeConcern.j, true);
+            writes.push(name);
+            if (writes.length === failAt && response === 'throw') throw Error('private-driver-error');
+            const index = (data[name] || []).findIndex(d => matches(d, q));
+            if (index >= 0) data[name].splice(index, 1);
+            if (writes.length === failAt) return {acknowledged: false, deletedCount: 1};
+            return {acknowledged: true, deletedCount: index >= 0 ? 1 : 0};
+        }
+
     });
     Object.keys(data).forEach(name => { db[name] = db.getCollection(name); });
-    vm.runInNewContext(program, {db, ObjectId, target, action, print: line => output.push(line)});
+    vm.runInNewContext(program, {db, ObjectId, target, action, oldIdentity: OLD, print: line => output.push(line)});
     return {output: output.join('\n'), writes};
 }
 let passed = 0;
@@ -82,5 +101,51 @@ test('missing device collection', () => rejected(d => { delete d.device; }));
 test('completed topology recognised conservatively', () => {
     const d = fixture(); d.site.shift(); Object.assign(d.site[0], {name: 'default', attr_hidden_id: 'default', attr_no_delete: true});
     assert.match(run(d).output, /UOS ALREADY_DEFAULT/);
+});
+test('successful promotion preserves imported and unrelated records', () => {
+    const d = fixture();
+    d.networkconf.push({_id: ObjectId('888888888888888888888888'), site_id: OLD});
+    d.setting.push({_id: ObjectId('999999999999999999999999'), key: 'global'});
+    const keep = JSON.stringify(d.setting);
+    assert.match(run(d, TARGET, 'flags').output, /UOS READY/);
+    assert.match(run(d, TARGET, 'cleanup').output, /UOS READY/);
+    assert.match(run(d, TARGET, 'verify').output, /UOS READY/);
+    assert.equal(JSON.stringify(d.setting), keep);
+    assert.equal(d.site.find(s => same(s._id, TARGET)).name, 'default');
+    assert.equal(d.site.some(s => same(s._id, OLD)), false);
+    assert.equal(run(d, TARGET, 'cleanup').writes.length, 0);
+});
+for (const response of ['throw', 'unacknowledged']) {
+    for (const index of [1, 2]) {
+        test('flag write failure ' + index + ' ' + response, () => {
+            const d = fixture(), result = run(d, TARGET, 'flags', index, response);
+            assert.match(result.output, /UOS FAIL/);
+            assert.doesNotMatch(result.output, /private-driver-error/);
+            assert.equal(result.writes.length, index);
+            if (index === 2 || response !== 'throw') assert.doesNotMatch(run(d).output, /UOS READY/);
+        });
+    }
+    for (const index of [1, 2, 3]) {
+        test('cleanup write failure ' + index + ' ' + response, () => {
+            const d = fixture();
+            d.networkconf.push({_id: ObjectId('888888888888888888888888'), site_id: OLD});
+            assert.match(run(d, TARGET, 'flags').output, /UOS READY/);
+            const result = run(d, TARGET, 'cleanup', index, response);
+            assert.match(result.output, /UOS FAIL/);
+            assert.equal(result.writes.length, index);
+            assert.doesNotMatch(run(d).output, /UOS READY/);
+        });
+    }
+}
+test('new Default device association after restart blocks cleanup', () => {
+    const d = fixture(); run(d, TARGET, 'flags'); d.device.push({site_id: OLD});
+    assert.equal(run(d, TARGET, 'cleanup').writes.length, 0);
+});
+test('unexpected target flag change blocks cleanup', () => {
+    const d = fixture(); run(d, TARGET, 'flags'); d.site[1].attr_no_delete = false;
+    assert.equal(run(d, TARGET, 'cleanup').writes.length, 0);
+});
+test('final verification rejects unexpected sites', () => {
+    assert.match(run(fixture(), TARGET, 'verify').output, /UOS FAIL/);
 });
 console.log(passed + ' tests passed');
