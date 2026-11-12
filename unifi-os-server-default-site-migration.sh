@@ -20,6 +20,7 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 
 STEP=start
 JOURNAL=""
+SUDO_AUTH_ARGS=(-n)
 log_event() {
   local line
   line="$(date -u +%Y-%m-%dT%H:%M:%SZ) phase=$STEP level=$1 $2"
@@ -96,7 +97,7 @@ count_lines() { printf '%s' "$1" | grep -c . || true; }
 # that account cannot read ("cannot chdir ... Permission denied"), so always
 # run from /tmp.
 as_svc() {
-  (cd /tmp && sudo -n -N -H -u "$SVC_USER" XDG_RUNTIME_DIR="/run/user/$SVC_UID" podman --remote=false "$@" </dev/null)
+  (cd /tmp && sudo "${SUDO_AUTH_ARGS[@]}" -H -u "$SVC_USER" XDG_RUNTIME_DIR="/run/user/$SVC_UID" podman --remote=false "$@" </dev/null)
 }
 
 in_container() { as_svc exec "$CONTAINER" "$@"; }
@@ -111,6 +112,19 @@ mongo_js() {
 # Discovery
 # ----------------------------------------------------------------------------
 
+configure_sudo() {
+  local help
+  help=$(LC_ALL=C sudo --help 2>/dev/null) || fail "Cannot inspect installed sudo options."
+  SUDO_AUTH_ARGS=(-n)
+  if [[ $help == *--no-update* ]]; then
+    SUDO_AUTH_ARGS+=(-N)
+  else
+    warn "sudo lacks --no-update; read-only commands may refresh its local authentication cache."
+  fi
+  sudo "${SUDO_AUTH_ARGS[@]}" true </dev/null || fail "Noninteractive sudo access failed. Run sudo -v; if it still fails, check sudo policy."
+  ok "sudo access confirmed."
+}
+
 check_basics() {
   [[ $(uname -s) == Linux ]] || fail "Linux is required."
   case $(uname -m) in x86_64|aarch64) ;; *) fail "Unsupported architecture." ;; esac
@@ -120,8 +134,7 @@ check_basics() {
   for cmd in sudo systemctl id awk grep stat sed tail head uname cat dirname podman date sha256sum sync flock; do
     command -v "$cmd" >/dev/null 2>&1 || fail "Required command not found: $cmd"
   done
-  sudo -n -N true </dev/null || fail "Authenticate with sudo -v before running this script."
-  ok "sudo access confirmed."
+  configure_sudo
 }
 
 service_running() {

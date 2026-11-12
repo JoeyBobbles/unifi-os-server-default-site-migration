@@ -13,7 +13,7 @@ restore rehearsal and [controlled test plan](TESTING.md) before authorising writ
 ## Requirements
 
 - Linux with systemd, Bash 5+, GNU coreutils, util-linux `flock`, and local rootless
-  Podman on x86-64 or ARM64. `sudo` must support `-N` (do not refresh credentials).
+  Podman on x86-64 or ARM64, and noninteractive `sudo` access after authentication.
 - Exactly one identifiable running `uosserver` service/container and its non-root
   service account. A root supervisor may use the dedicated `uosserver` account.
 - Local MongoDB and `mongo` or `mongosh` in the container. Custom authentication,
@@ -50,9 +50,11 @@ bash unifi-os-server-default-site-migration.sh --check \
 ```
 
 No mode defaults to execution: omitting a mode also runs read-only checks. `--check`
-never issues database writes, creates a journal/lock or restarts services. It does
-not refresh sudo timestamps. Normal system auditing and vendor/runtime logging can
-still occur when commands or reads are performed.
+never issues database writes, creates a journal/lock or restarts services. It uses
+sudo's no-update option when available. When unavailable (including some
+`sudo-rs` implementations), it warns that sudo may refresh its local authentication
+cache. Normal system auditing and vendor/runtime logging can also occur when
+commands or reads are performed.
 
 Exit status `0` means the read-only topology/schema checks passed (or an existing
 completed journal was verified). It is **not authorisation to migrate**: missing

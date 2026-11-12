@@ -11,6 +11,7 @@ shellcheck unifi-os-server-default-site-migration.sh tests/*.sh
 node --check migration.js
 node tests/migration.test.js
 bash tests/environment.test.sh
+bash tests/sudo.test.sh
 bash tests/recovery.test.sh
 bash tests/journal.test.sh
 python3 tests/execution.test.py
@@ -76,9 +77,10 @@ code first. Preserve the source controller and managed devices untouched.
    --recovery ...`. Confirm isolation and the quiet maintenance window. Stop here
    until explicit destructive-test authorisation has been granted.
 
-Development validation passed 70 synthetic cases: 37 Mongo-program cases, eight
-environment cases, eight recovery cases, five journal cases and 12 Bash execution
-cases. Bash syntax checks, ShellCheck and JavaScript syntax checks also passed.
+Development validation passed 75 synthetic cases: 37 Mongo-program cases, eight
+environment cases, five sudo compatibility cases, eight recovery cases, five journal
+cases and 12 Bash execution cases. Bash syntax checks, ShellCheck and JavaScript
+syntax checks also passed.
 
 Simulation tests establish neither real installation topology nor recovery quality.
 Live compatibility requires the separately authorised verification below.
