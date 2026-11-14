@@ -1,7 +1,7 @@
 # Recovery prerequisite and stop procedure
 
-Direct database edits are unsupported. A checkpoint is acceptable only after an
-isolated restoration of that exact checkpoint has demonstrated recovery of both
+Direct database edits are unsupported. Normal execution requires verified recovery
+evidence. A checkpoint is acceptable only after an isolated restoration of that exact checkpoint has demonstrated recovery of both
 sites, the imported configuration and administrative access on the same software
 versions. A backup file's existence or checksum alone is insufficient.
 
@@ -68,6 +68,34 @@ with `sha256sum RECOVERY.md`. The checkpoint checksum describes the archive or a
 private immutable snapshot manifest, not a fabricated dummy file. This attestation
 is an operator assertion backed by a rehearsal/runbook, not automated proof of
 restore quality. The script does not open, upload or copy the checkpoint.
+
+## Explicit disposable-test exception
+
+Only for an explicitly authorised test destination whose complete configuration
+loss and rebuild are acceptable, `--disposable-test` can replace the recovery
+attestation requirement. It cannot be combined with `--recovery`, cannot be enabled
+through an environment variable and is never the default. It does not claim that
+a backup exists or has been restored; keep any available backups/exports private
+and independently accessible. It is not appropriate for a controller managing a
+production network.
+
+The operator must still select the exact site and authorise deletion/restarts at
+the terminal, then type `I ACCEPT A COMPLETE REBUILD` and
+`DESTINATION IS ISOLATED`. Isolation means the destination cannot contact the source
+controller or production devices; the script records the operator's attestation
+and does not configure network isolation. Version, topology, schema, device,
+scoped-write and journal checks all remain enforced.
+
+Before any database write the journal records `disposable_test=yes`,
+`restore_rehearsal=waived`, `rebuild_accepted=yes` and `isolation_attested=yes`.
+It never records an unperformed restore as verified. Read-only
+`--check --disposable-test` reports the selected waiver without writing a journal
+or issuing confirmations; that is not authorisation by itself.
+
+After a failed disposable test, preserve the journal and diagnostic evidence.
+Do not blindly rerun or remove the guard. Rebuild the destination or use a separately
+approved recovery process; restoration from an untested backup remains unproven.
+The script never wipes, reinstalls or automatically rolls back the destination.
 
 ## On any failure or interruption
 

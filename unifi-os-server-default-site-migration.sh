@@ -20,6 +20,7 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 
 STEP=start
 JOURNAL=""
+DISPOSABLE_TEST=0
 SUDO_AUTH_ARGS=(-n)
 log_event() {
   local line
@@ -54,6 +55,9 @@ open_journal() {
   (umask 077; set -C; : > "$STATE_DIR/journal") || fail "Cannot create a new journal."
   JOURNAL="$STATE_DIR/journal"
   log_event CONTEXT "target=$TARGET_ID old=$OLD_ID database=$MONGO_DB"
+  if (( DISPOSABLE_TEST )); then
+    log_event AUTHORIZATION "disposable_test=yes restore_rehearsal=waived rebuild_accepted=yes isolation_attested=yes"
+  fi
 }
 
 on_exit() {
@@ -308,20 +312,38 @@ restart_service() {
   fail "Service/database restart timed out. Follow RECOVERY.md."
 }
 
+# The disposable-test exception is explicit and never represented as recovery
+# verification. All database, environment, identity and journal guards still apply.
+execution_prerequisites() {
+  if (( DISPOSABLE_TEST )); then
+    [[ -z $RECOVERY_FILE ]] || fail "Disposable testing and recovery attestation are mutually exclusive."
+    warn "DISPOSABLE TEST: restore rehearsal waived; complete data loss and a rebuild must be accepted. Destination isolation is required."
+  else
+    recovery_prerequisites
+  fi
+}
+
 execute_migration() {
   (( VERSIONS_KNOWN )) || fail "Unknown versions block execution."
-  recovery_prerequisites
+  execution_prerequisites
   ask "Type the selected imported site ObjectId ($TARGET_ID): "
   [[ $ANSWER == "$TARGET_ID" ]] || fail "Site confirmation did not match."
   ask "Type DELETE EMPTY DEFAULT to authorise irreversible deletion and both restarts: "
   [[ $ANSWER == 'DELETE EMPTY DEFAULT' ]] || fail "Destructive confirmation did not match."
-  ask "Type RESTORE VERIFIED to attest the checkpoint was restored and destination remains isolated and unchanged: "
-  [[ $ANSWER == 'RESTORE VERIFIED' ]] || fail "Recovery confirmation did not match."
+  if (( DISPOSABLE_TEST )); then
+    ask "Type I ACCEPT A COMPLETE REBUILD to waive the restore rehearsal for this disposable test: "
+    [[ $ANSWER == 'I ACCEPT A COMPLETE REBUILD' ]] || fail "Disposable-test loss acceptance did not match."
+    ask "Type DESTINATION IS ISOLATED to attest it cannot contact the source controller or production devices: "
+    [[ $ANSWER == 'DESTINATION IS ISOLATED' ]] || fail "Destination isolation confirmation did not match."
+  else
+    ask "Type RESTORE VERIFIED to attest the checkpoint was restored and destination remains isolated and unchanged: "
+    [[ $ANSWER == 'RESTORE VERIFIED' ]] || fail "Recovery confirmation did not match."
+  fi
   open_journal
   step revalidate
   database_phase check
-  # No writes have occurred yet; recheck checkpoint age after operator prompts.
-  recovery_prerequisites
+  # No writes have occurred yet; recheck prerequisites after operator prompts.
+  execution_prerequisites
   step flags
   database_phase flags
   restart_service
@@ -369,12 +391,12 @@ recovery_prerequisites() {
 }
 
 usage() {
-  say "Usage: bash $0 --check [--site OBJECT_ID] [--state-dir DIRECTORY] [--recovery FILE]"
-  say "       bash $0 --execute --site OBJECT_ID --state-dir DIRECTORY --recovery FILE"
+  say "Usage: bash $0 --check [--site OBJECT_ID] [--state-dir DIRECTORY] [--recovery FILE | --disposable-test]"
+  say "       bash $0 --execute --site OBJECT_ID --state-dir DIRECTORY (--recovery FILE | --disposable-test)"
 }
 
 main() {
-  TARGET_ID=""; OLD_ID=""; STATE_DIR=""; RECOVERY_FILE=""
+  TARGET_ID=""; OLD_ID=""; STATE_DIR=""; RECOVERY_FILE=""; DISPOSABLE_TEST=0
   local mode=check mode_set=0 selected=""
   local site_set=0 state_set=0 recovery_set=0
   while (( $# )); do
@@ -382,6 +404,9 @@ main() {
       --check|--execute)
         (( mode_set == 0 )) || fail "Specify one mode only."
         mode="${1#--}"; mode_set=1; shift ;;
+      --disposable-test)
+        (( DISPOSABLE_TEST == 0 )) || fail "Duplicate disposable-test option."
+        DISPOSABLE_TEST=1; shift ;;
       --site|--state-dir|--recovery)
         (( $# >= 2 )) && [[ -n $2 && $2 != --* ]] || fail "Option requires a value."
         case "$1" in
@@ -396,8 +421,9 @@ main() {
   done
   [[ -z $TARGET_ID || $TARGET_ID =~ ^[0-9a-f]{24}$ ]] || fail "Select a lowercase 24-digit hexadecimal ObjectId."
   selected="$TARGET_ID"
+  [[ $DISPOSABLE_TEST == 0 || -z $RECOVERY_FILE ]] || fail "Disposable testing and recovery attestation are mutually exclusive."
   if [[ $mode == execute ]]; then
-    [[ -n $TARGET_ID && -n $STATE_DIR && -n $RECOVERY_FILE ]] || fail "Execution requires site, state directory and recovery attestation."
+    [[ -n $TARGET_ID && -n $STATE_DIR && ( $DISPOSABLE_TEST == 1 || -n $RECOVERY_FILE ) ]] || fail "Execution requires site, state directory and recovery attestation or explicit disposable-test mode."
   fi
   [[ -z $STATE_DIR ]] || validate_state_directory
   step discovery
@@ -423,7 +449,7 @@ main() {
   step preflight
   database_phase check
   if [[ $mode == check ]]; then
-    if [[ -n $RECOVERY_FILE ]]; then recovery_prerequisites; else warn "Execution prerequisite missing: restore-tested recovery attestation (RECOVERY.md)."; fi
+    if [[ -n $RECOVERY_FILE || $DISPOSABLE_TEST == 1 ]]; then execution_prerequisites; else warn "Execution prerequisite missing: restore-tested recovery attestation (RECOVERY.md)."; fi
     [[ -n $STATE_DIR ]] || warn "Execution prerequisite missing: persistent private state directory."
     ok "Read-only preflight passed; no database writes, journals or service restarts performed."
     return 0

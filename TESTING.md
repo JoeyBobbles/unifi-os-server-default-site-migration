@@ -35,7 +35,9 @@ failures,
 legacy and modern ObjectId conversion, shell startup/retry options,
 version/capability discovery failures, recovery evidence rejection, exclusive
 locking, partially moved flags, per-write exceptions and unacknowledged writes,
-nonzero Mongo process exits despite a success marker, both restart failures,
+normal recovery enforcement, explicit disposable-test waiver/isolation confirmation,
+waiver journaling, conflicting/duplicate option rejection, environment-variable
+bypass refusal, nonzero Mongo process exits despite a success marker, both restart failures,
 final verification failure, TERM and forced termination, blocked partial reruns and
 read-only verification of completed runs. Success cases compare retained imported
 and global records to the synthetic baseline.
@@ -84,9 +86,9 @@ code first. Preserve the source controller and managed devices untouched.
    --recovery ...`. Confirm isolation and the quiet maintenance window. Stop here
    until explicit destructive-test authorisation has been granted.
 
-Development validation passed 118 synthetic cases: 66 Mongo-program cases, eight
+Development validation passed 129 synthetic cases: 66 Mongo-program cases, eight
 environment cases, 14 version diagnostic cases, five sudo compatibility cases,
-eight recovery cases, five journal cases and 12 Bash execution cases. Bash syntax checks, ShellCheck and JavaScript
+eight recovery cases, five journal cases and 23 Bash execution cases. Bash syntax checks, ShellCheck and JavaScript
 syntax checks also passed.
 
 Simulation tests establish neither real installation topology nor recovery quality.
@@ -101,8 +103,8 @@ managed devices or the source controller; establish and verify that isolation
 before starting. Use synthetic sites/configuration wherever possible. Do not
 change production firewall/network settings, device state or inform addresses.
 
-Prepare a private runbook with the exact installed-version restore steps, console
-access, an independent checkpoint copy and baseline evidence. Rehearse complete
+For the normal recovery-protected test path, prepare a private runbook with the
+exact installed-version restore steps, console access, an independent checkpoint copy and baseline evidence. Rehearse complete
 restoration first. Keep a private state directory and attestation outside the
 checkout. Use the same directory for all rerun checks on that instance. Reset the
 lab from the verified baseline between scenarios; archive evidence after recovery,
@@ -130,6 +132,16 @@ No unattended confirmation flags or production connection steps are provided.
 | Rerun after partial completion | Invoke execute with the same state directory; also invoke check. | Both stop on the incomplete journal, even if an initial topology looks valid. No additional writes/restarts. Removing the journal or changing directories is prohibited. |
 | Rerun after completion | Invoke execute again, then check with the same state directory. | Execute refuses; check verifies the final database state read-only. Changed topology invalidates completion. Without a journal, already-Default topology is reported conservatively. |
 | Recovery | Apply the exact rehearsed runbook to each failed state, including loss of the application UI. | Both original sites and imported configuration restored; counts/representative values/admin access match baseline; service healthy; isolation retained; evidence archived privately. |
+
+An operator may instead explicitly authorise a disposable test without a restore
+rehearsal if complete loss and rebuilding are acceptable. Use `--disposable-test`
+in place of `--recovery FILE`, with the same explicit site and persistent state
+directory. Verify the two additional terminal confirmations, waiver entries in
+the journal, unchanged database/environment/device checks, rejection of mixed
+options and blocked reruns. Do not fabricate the normal recovery attestation.
+Isolate the destination from the source controller and production devices before
+execution. This exception does not constitute evidence of backup recoverability;
+restore/recovery scenarios remain unverified until independently exercised.
 
 Fault instrumentation must be reviewed separately before execution. Start with the
 existing synthetic harness, then use a disposable real Mongo/application instance

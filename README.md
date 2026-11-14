@@ -62,7 +62,7 @@ commands or reads are performed.
 
 Exit status `0` means the read-only topology/schema checks passed (or an existing
 completed journal was verified). It is **not authorisation to migrate**: missing
-recovery/state-directory prerequisites and unknown versions are reported as
+normal recovery/state-directory prerequisites and unknown versions are reported as
 warnings. Failed schema/topology checks or an explicitly supplied invalid recovery
 attestation return nonzero. Unknown application versions always block execution.
 OS Server discovery reads `APP_VERSION` with `APP_MODEL=UOSSERVER` or legacy
@@ -99,13 +99,42 @@ bash unifi-os-server-default-site-migration.sh --execute \
   --state-dir "$MIGRATION_STATE_DIR" --recovery "$RECOVERY_ATTESTATION"
 ```
 
-Execution requires three keyboard confirmations: the exact imported ObjectId,
+Normal execution requires three keyboard confirmations: the exact imported ObjectId,
 `DELETE EMPTY DEFAULT`, and `RESTORE VERIFIED`. Piped input cannot confirm them.
 A new journal is persisted before any database change. An existing journal blocks
 execution even if it describes a successful run. Use `--check` with that same state
 directory to verify completed runs; interrupted/failed journals require recovery.
 A single Default without a journal is recognised conservatively as already Default
 or a missing import, never treated as proof of a successful past migration.
+
+## Explicitly authorised disposable tests
+
+A disposable destination with no production device connectivity may be tested
+without a restore rehearsal using `--disposable-test`. This is a deliberate
+exception for operators who accept complete configuration loss and rebuilding the
+destination. The normal execution path still requires restore-tested recovery.
+
+Set `IMPORTED_SITE_ID` to the real candidate ObjectId reported by preflight, and
+use the same private persistent state directory for every attempt:
+
+```bash
+bash unifi-os-server-default-site-migration.sh --check \
+  --site "$IMPORTED_SITE_ID" --state-dir "$MIGRATION_STATE_DIR" --disposable-test
+```
+
+Only after explicit destructive-test authorisation:
+
+```bash
+bash unifi-os-server-default-site-migration.sh --execute \
+  --site "$IMPORTED_SITE_ID" --state-dir "$MIGRATION_STATE_DIR" --disposable-test
+```
+
+Do not supply `--recovery` with this option. In place of `RESTORE VERIFIED`, the
+operator must type `I ACCEPT A COMPLETE REBUILD` and `DESTINATION IS ISOLATED`.
+The original site-ID and destructive confirmations still apply. The journal
+records the restore-rehearsal waiver and accepted rebuild; it does not claim a
+verified recovery checkpoint. All other safety checks and partial-run guards stay
+active. See [RECOVERY.md](RECOVERY.md#explicit-disposable-test-exception).
 
 ## Changes and boundaries
 
